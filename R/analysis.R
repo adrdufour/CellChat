@@ -989,18 +989,21 @@ rankSimilarity <- function(object, slot.name = "netP", type = c("functional","st
 #' @param slot.name the slot name of object that is used to compute centrality measures of signaling networks
 #' @param measure "weight" or "count". "weight": comparing the total interaction weights (strength); "count": comparing the number of interactions;
 #' @param mode "single","comparison"
-#' @param comparison a numerical vector giving the datasets for comparison; a single value means ranking for only one dataset and two values means ranking comparison for two datasets
-#' @param color.use defining the color for each cell group
+#' @param comparison a numerical vector giving the datasets for comparison; a single value means ranking for only one dataset and two or more values (e.g., comparison = c(1,2,3)) means ranking comparison for these datasets.
+#' When more than two datasets are compared, signaling are grouped by the dataset showing the highest information flow (first dataset on top) and the y-axis text is colored by this dataset.
+#' @param color.use defining the color for each dataset, in the order of `comparison` (or a vector named by the dataset names)
 #' @param stacked whether plot the stacked bar plot
 #' @param sources.use a vector giving the index or the name of source cell groups
 #' @param targets.use a vector giving the index or the name of target cell groups.
 #' @param signaling a vector giving the signaling pathway to show
 #' @param pairLR a vector giving the names of L-R pairs to show (e.g, pairLR = c("IL1A_IL1R1_IL1RAP","IL1B_IL1R1_IL1RAP"))
 #' @param signaling.type a char giving the types of signaling from the three categories c("Secreted Signaling", "ECM-Receptor", "Cell-Cell Contact")
-#' @param do.stat whether do a Wilcoxon test to determine whether there is significant difference between two datasets. Default = FALSE
-#' @param paired.test a logical indicating whether you want a paired test. Paired test is applicable to compare two datasets with the same cellular compositions.
-#' @param cutoff.pvalue the cutoff of pvalue when doing Wilcoxon test; Default = 0.05
-#' @param tol a tolerance when considering the relative contribution being equal between two datasets. contribution.relative between 1-tol and 1+tol will be considered as equal contribution
+#' @param do.stat whether do a statistical test to determine whether there is significant difference between datasets. Default = FALSE.
+#' A Wilcoxon test is used for two datasets; for more than two datasets, a Friedman test (paired.test = TRUE) or a Kruskal-Wallis test (paired.test = FALSE) is used.
+#' @param paired.test a logical indicating whether you want a paired test. Paired test is applicable to compare datasets with the same cellular compositions.
+#' @param cutoff.pvalue the cutoff of pvalue when doing statistical test; Default = 0.05
+#' @param tol a tolerance when considering the relative contribution being equal between datasets. contribution.relative between 1-tol and 1+tol will be considered as equal contribution.
+#' For more than two datasets, the y-axis text is colored only when the highest information flow is larger than (1+tol) times the second highest one.
 #' @param thresh threshold of the p-value for determining significant interaction
 #'
 #' @param do.flip whether flip the x-y axis
@@ -1027,7 +1030,8 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
                     axis.gap = FALSE, ylim = NULL, segments = NULL, tick_width = NULL, rel_heights = c(0.9,0,0.1)) {
   measure <- match.arg(measure)
   mode <- match.arg(mode)
-  options(warn = -1)
+  old.options <- options(warn = -1)
+  on.exit(options(old.options), add = TRUE)
   object1 <- methods::slot(object, slot.name)
   object.names <- names(object1)
   if (measure == "weight") {
@@ -1112,40 +1116,45 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
     }
 
   } else if (mode == "comparison") {
+    n.comparison <- length(comparison)
+    if (n.comparison < 2) {
+      stop("Please provide at least two datasets in `comparison`, or set `mode = 'single'`! ")
+    }
     prob.list <- list()
     pSum <- list()
     pSum.original <- list()
     pair.name <- list()
-    idx <- list()
-    pSum.original.all <- c()
     object.names.comparison <- c()
-    for (i in 1:length(comparison)) {
+    for (i in 1:n.comparison) {
       object.list <- methods::slot(object, slot.name)[[comparison[i]]]
       prob <- object.list$prob
       prob[object.list$pval > thresh] <- 0
       if (measure == "count") {
         prob <- 1*(prob > 0)
       }
+      # cell groups are matched per dataset, so that datasets with different cellular compositions are handled correctly
       if (!is.null(sources.use)) {
+        sources.use.i <- sources.use
         if (is.character(sources.use)) {
           if (all(sources.use %in% dimnames(prob)[[1]])) {
-            sources.use <- match(sources.use, dimnames(prob)[[1]])
+            sources.use.i <- match(sources.use, dimnames(prob)[[1]])
           } else {
             stop("The input `sources.use` should be cell group names or a numerical vector!")
           }
         }
-        idx.t <- setdiff(1:nrow(prob), sources.use)
+        idx.t <- setdiff(1:dim(prob)[1], sources.use.i)
         prob[idx.t, , ] <- 0
       }
       if (!is.null(targets.use)) {
+        targets.use.i <- targets.use
         if (is.character(targets.use)) {
-          if (all(targets.use %in% dimnames(prob)[[1]])) {
-            targets.use <- match(targets.use, dimnames(prob)[[2]])
+          if (all(targets.use %in% dimnames(prob)[[2]])) {
+            targets.use.i <- match(targets.use, dimnames(prob)[[2]])
           } else {
             stop("The input `targets.use` should be cell group names or a numerical vector!")
           }
         }
-        idx.t <- setdiff(1:nrow(prob), targets.use)
+        idx.t <- setdiff(1:dim(prob)[2], targets.use.i)
         prob[ ,idx.t, ] <- 0
       }
       if (sum(prob) == 0) {
@@ -1153,134 +1162,116 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
       }
       prob.list[[i]] <- prob
       pSum.original[[i]] <- apply(prob, 3, sum)
-    }
-    # Step 1: Flatten both lists to a numeric vector
-    all_values <- unlist(pSum.original, use.names = FALSE)
-
-    # Step 2: Compute global min and max
-    global_min <- min(all_values, na.rm = TRUE)
-    global_max <- max(all_values, na.rm = TRUE)
-
-    for (i in 1:length(comparison)) {
-        if (measure == "weight") {
+      if (measure == "weight") {
         pSum[[i]] <- log(1+pSum.original[[i]])
         pSum[[i]][is.na(pSum[[i]])] <- 0
       } else if (measure == "count") {
-        pSum[[i]] <- pSum.original[[i]] # the prob is already binarized in line 1136
+        pSum[[i]] <- pSum.original[[i]] # the prob is already binarized above
       }
       pair.name[[i]] <- names(pSum.original[[i]])
       object.names.comparison <- c(object.names.comparison, object.names[comparison[i]])
     }
 
     pair.name.all <- as.character(unique(unlist(pair.name)))
-    df <- lapply(seq_along(comparison), function(i) {
-      d <- data.frame(name = pair.name.all, contribution = 0, contribution.scaled = 0, group = object.names[comparison[i]], row.names = pair.name.all)
+    df <- lapply(seq_len(n.comparison), function(i) {
+      d <- data.frame(name = pair.name.all, contribution = 0, contribution.scaled = 0, group = object.names.comparison[i], row.names = pair.name.all)
       d[pair.name[[i]], "contribution.scaled"] <- pSum[[i]]
       d[pair.name[[i]], "contribution"] <- pSum.original[[i]]
       d
     })
 
-
-    # contribution.relative <- as.numeric(format(df[[length(comparison)]]$contribution/abs(df[[1]]$contribution), digits=1))
-    # #  contribution.relative <- as.numeric(format(df[[length(comparison)]]$contribution.scaled/abs(df[[1]]$contribution.scaled), digits=1))
-    # contribution.relative2 <- as.numeric(format(df[[length(comparison)-1]]$contribution/abs(df[[1]]$contribution), digits=1))
-    # contribution.relative[is.na(contribution.relative)] <- 0
-    # for (i in 1:length(comparison)) {
-    #   df[[i]]$contribution.relative <- contribution.relative
-    #   df[[i]]$contribution.relative2 <- contribution.relative2
-    # }
-    # df[[1]]$contribution.data2 <- df[[length(comparison)]]$contribution
-    # idx <- with(df[[1]], order(-contribution.relative,  -contribution.relative2, contribution, -contribution.data2))
-    #
+    # relative contribution of each dataset compared to the first one
     contribution.relative <- list()
-    for (i in 1:(length(comparison)-1)) {
-      contribution.relative[[i]] <- as.numeric(format(df[[length(comparison)-i+1]]$contribution/df[[1]]$contribution, digits=1))
+    for (i in 1:(n.comparison-1)) {
+      contribution.relative[[i]] <- as.numeric(format(df[[n.comparison-i+1]]$contribution/df[[1]]$contribution, digits=1))
       contribution.relative[[i]][is.na(contribution.relative[[i]])] <- 0
     }
     names(contribution.relative) <- paste0("contribution.relative.", 1:length(contribution.relative))
     for (j in seq_along(contribution.relative)) {
       df <- lapply(df, function(x) { x[[names(contribution.relative)[j]]] <- contribution.relative[[j]]; x })
     }
-    df[[1]]$contribution.data2 <- df[[length(comparison)]]$contribution
-    order_args <- c(paste0("-contribution.relative.", seq_along(contribution.relative)), "contribution", "-contribution.data2")
-    order_expr <- paste(order_args, collapse = ", ")
-    idx <- eval(parse(text = paste0("with(df[[1]], order(", order_expr, "))")))
 
-    for (i in 1:length(comparison)) {
+    # dataset with the highest information flow for each signaling and how specific it is
+    contribution.mat <- sapply(df, function(x) x$contribution)
+    contribution.mat <- matrix(contribution.mat, ncol = n.comparison)
+    dominant <- max.col(contribution.mat, ties.method = "first")
+    contribution.sorted <- t(apply(contribution.mat, 1, sort, decreasing = TRUE))
+    fold.change <- contribution.sorted[, 1]/contribution.sorted[, 2]
+    specificity <- contribution.sorted[, 1]/rowSums(contribution.mat)
+    specificity[is.na(specificity)] <- 0
+
+    if (n.comparison == 2) {
+      idx <- order(-df[[1]]$contribution.relative.1, df[[1]]$contribution, -df[[2]]$contribution)
+    } else {
+      # signalings are grouped by the dataset in which they are the strongest (first dataset on top after flipping);
+      # within each group, the most dataset-specific signalings are placed at the outer edges
+      idx <- order(-dominant, ifelse(dominant == 1, specificity, -specificity), rowSums(contribution.mat))
+    }
+    for (i in 1:n.comparison) {
+      df[[i]]$dominant.dataset <- object.names.comparison[dominant]
+      df[[i]]$specificity <- specificity
       df[[i]] <- df[[i]][idx, ]
       df[[i]]$name <- factor(df[[i]]$name, levels = as.character(df[[i]]$name))
     }
-    df[[1]]$contribution.data2 <- NULL
 
     df <- do.call(rbind, df)
     df$group <- factor(df$group, levels = object.names.comparison)
 
     if (is.null(color.use)) {
-    color.use <- ggPalette(length(levels(df$group)))
+      color.use <- ggPalette(n.comparison)
     }
+    if (length(color.use) < n.comparison) {
+      stop("The number of colors in `color.use` should be at least the number of compared datasets!")
+    }
+    color.use <- color.use[1:n.comparison]
+    if (is.null(names(color.use)) || !all(object.names.comparison %in% names(color.use))) {
+      names(color.use) <- object.names.comparison
+    }
+    color.use <- color.use[object.names.comparison]
 
-    # perform statistical analysis
-    # if (do.stat) {
-    #   pvalues <- c()
-    #   for (i in 1:length(pair.name.all)) {
-    #     df.prob <- data.frame()
-    #     for (j in 1:length(comparison)) {
-    #       if (pair.name.all[i] %in% pair.name[[j]]) {
-    #         df.prob <- rbind(df.prob, data.frame(prob = as.vector(prob.list[[j]][ , , pair.name.all[i]]), group = comparison[j]))
-    #       } else {
-    #         df.prob <- rbind(df.prob, data.frame(prob = as.vector(matrix(0, nrow = nrow(prob.list[[j]]), ncol = nrow(prob.list[[j]]))), group = comparison[j]))
-    #       }
-    #
-    #     }
-    #     df.prob$group <- factor(df.prob$group, levels = comparison)
-    #     if (length(comparison) == 2) {
-    #       pvalues[i] <- wilcox.test(prob ~ group, data = df.prob)$p.value
-    #     } else {
-    #       pvalues[i] <- kruskal.test(prob ~ group, data = df.prob)$p.value
-    #     }
-    #   }
-    #   df$pvalues <- pvalues
-    # }
-    if (do.stat & length(comparison) == 2) {
-        if (nrow(prob.list[[1]]) != nrow(prob.list[[2]])) {
-            if (paired.test) {
-              stop("Paired test is not applicable to datasets with different cellular compositions! Please set `do.stat = FALSE` or `paired.test = FALSE`! \n")
-            }
-        }
-        for (i in 1:length(pair.name.all)) {
-          prob.values <- matrix(0, nrow = nrow(prob.list[[1]]) * nrow(prob.list[[1]]), ncol = length(comparison))
-          for (j in 1:length(comparison)) {
-            if (pair.name.all[i] %in% pair.name[[j]]) {
-              prob.values[, j] <- as.vector(prob.list[[j]][ , , pair.name.all[i]])
-            } else {
-              prob.values[, j] <- NA
-            }
-          }
-          prob.values <- prob.values[rowSums(prob.values, na.rm = TRUE) != 0, , drop = FALSE]
-          if (nrow(prob.values) >3 & sum(is.na(prob.values)) == 0) {
-            pvalues <- wilcox.test(prob.values[ ,1], prob.values[ ,2], paired = paired.test)$p.value
+    # perform statistical analysis: Wilcoxon test for two datasets; Friedman (paired) or Kruskal-Wallis test for more datasets
+    if (do.stat) {
+      cell.pairs.list <- lapply(prob.list, function(x) as.vector(outer(dimnames(x)[[1]], dimnames(x)[[2]], paste, sep = " -> ")))
+      if (paired.test && length(unique(lapply(cell.pairs.list, sort))) > 1) {
+        stop("Paired test is not applicable to datasets with different cellular compositions! Please set `do.stat = FALSE` or `paired.test = FALSE`! \n")
+      }
+      cell.pairs <- unique(unlist(cell.pairs.list))
+      df$pvalues <- NA
+      for (i in 1:length(pair.name.all)) {
+        prob.values <- matrix(0, nrow = length(cell.pairs), ncol = n.comparison, dimnames = list(cell.pairs, NULL))
+        for (j in 1:n.comparison) {
+          if (pair.name.all[i] %in% pair.name[[j]]) {
+            prob.values[cell.pairs.list[[j]], j] <- as.vector(prob.list[[j]][ , , pair.name.all[i]])
           } else {
-            pvalues <- 0
+            prob.values[, j] <- NA
           }
-          pvalues[is.na(pvalues)] <- 0
-          df$pvalues[df$name == pair.name.all[i]] <- pvalues
         }
+        prob.values <- prob.values[rowSums(prob.values, na.rm = TRUE) != 0, , drop = FALSE]
+        pvalues <- 0
+        if (nrow(prob.values) > 3 & sum(is.na(prob.values)) == 0) {
+          if (n.comparison == 2) {
+            pvalues <- wilcox.test(prob.values[ ,1], prob.values[ ,2], paired = paired.test)$p.value
+          } else if (paired.test) {
+            pvalues <- friedman.test(prob.values)$p.value
+          } else {
+            pvalues <- kruskal.test(lapply(1:n.comparison, function(j) prob.values[, j]))$p.value
+          }
+        }
+        pvalues[is.na(pvalues)] <- 0
+        df$pvalues[df$name == pair.name.all[i]] <- pvalues
       }
-
-
-    if (length(comparison) == 2) {
-      if (do.stat) {
-        colors.text <- ifelse((df$contribution.relative < 1-tol) & (df$pvalues < cutoff.pvalue), color.use[2], ifelse((df$contribution.relative > 1+tol) & df$pvalues < cutoff.pvalue, color.use[1], "black"))
-      } else {
-        colors.text <- ifelse(df$contribution.relative < 1-tol, color.use[2], ifelse(df$contribution.relative > 1+tol, color.use[1], "black"))
-      }
-    } else {
-      message("The text on the y-axis will not be colored for the number of compared datasets larger than 3!")
-      colors.text = NULL
     }
 
     df <- df[ave(df$contribution, df$name, FUN = sum) != 0, ]
 
+    if (!is.null(signaling.type)) {
+      LR <- subset(object@DB$interaction, annotation %in% signaling.type)
+      if (slot.name == "netP") {
+        signaling <- unique(LR$pathway_name)
+      } else if (slot.name == "net") {
+        pairLR <- LR$interaction_name
+      }
+    }
     if ((slot.name == "netP") && (!is.null(signaling))) {
       df <- subset(df, name %in% signaling)
     } else if ((slot.name == "netP") &&(!is.null(pairLR))) {
@@ -1291,25 +1282,49 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
     } else if ((slot.name == "net") && (!is.null(signaling))) {
       stop("You need to set `slot.name == 'netP'` if showing specific signaling pathways ")
     }
+    if (nrow(df) == 0) {
+      stop("No inferred communications for the input!")
+    }
+    df$name <- droplevels(df$name)
+
+    # color the text on the y-axis according to the dataset showing the highest information flow
+    df.text <- df[df$group == object.names.comparison[1], , drop = FALSE]
+    df.text <- df.text[match(levels(df$name), df.text$name), , drop = FALSE]
+    idx.text <- match(df.text$name, pair.name.all)
+    if (n.comparison == 2) {
+      is.enriched <- (df.text$contribution.relative.1 < 1-tol) | (df.text$contribution.relative.1 > 1+tol)
+    } else {
+      is.enriched <- fold.change[idx.text] > 1+tol
+    }
+    is.enriched[is.na(is.enriched)] <- TRUE
+    if (do.stat) {
+      is.enriched <- is.enriched & (df.text$pvalues < cutoff.pvalue)
+    }
+    colors.text <- ifelse(is.enriched, color.use[dominant[idx.text]], "black")
+    colors.text <- unname(colors.text)
+
+    # https://stackoverflow.com/questions/49448497/coord-flip-changes-ordering-of-bars-within-groups-in-grouped-bar-plot
+    # reverse the levels so that the first dataset appears on top after flipping; colors are matched by names
+    if (do.flip) {
+      df$group <- factor(df$group, levels = rev(levels(df$group)))
+    }
 
     if (stacked) {
-      gg <- ggplot(df, aes(x=name, y=contribution, fill = group)) + geom_bar(stat="identity",width = bar.w, position ="fill") # +
-      # xlab("") + ylab("Relative information flow") #+ theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
-      #  scale_y_discrete(breaks=c("0","0.5","1")) +
+      gg <- ggplot(df, aes(x=name, y=contribution, fill = group)) + geom_bar(stat="identity",width = bar.w, position ="fill")
       if (measure == "weight") {
         gg <- gg + xlab("") + ylab("Relative information flow")
       } else if (measure == "count") {
         gg <- gg + xlab("") + ylab("Relative number of interactions")
       }
-
-      gg <- gg + geom_hline(yintercept = 0.5, linetype="dashed", color = "grey50", size=0.5)
+      # dashed line(s) showing an equal contribution of all datasets
+      gg <- gg + geom_hline(yintercept = seq_len(n.comparison-1)/n.comparison, linetype="dashed", color = "grey50", size=0.5)
     } else {
       if (show.raw) {
         gg <- ggplot(df, aes(x=name, y=contribution, fill = group)) + geom_bar(stat="identity",width = bar.w, position = position_dodge(0.8)) +
-          xlab("") + ylab(ylabel) #+ coord_flip()#+ theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+          xlab("") + ylab(ylabel)
       } else {
         gg <- ggplot(df, aes(x=name, y=contribution.scaled, fill = group)) + geom_bar(stat="identity",width = bar.w, position = position_dodge(0.8)) +
-          xlab("") + ylab(ylabel) #+ coord_flip()#+ theme(axis.text.x = element_blank(),axis.ticks.x = element_blank())
+          xlab("") + ylab(ylabel)
       }
 
       if (axis.gap) {
@@ -1337,8 +1352,7 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
     }
 
     gg <- gg + theme(axis.text=element_text(size=font.size), axis.title.y = element_text(size=font.size))
-    gg <- gg + scale_fill_manual(name = "", values = setNames(color.use, rev(levels(df$group))))
-    gg <- gg + guides(fill = guide_legend(reverse = TRUE))
+    gg <- gg + scale_fill_manual(name = "", values = color.use, breaks = names(color.use))
     gg <- gg + theme(axis.text.x = element_text(angle = x.angle, hjust=x.hjust),
                      axis.text.y = element_text(angle = y.angle, hjust=y.hjust))
     if (!is.null(title)) {
@@ -1948,13 +1962,32 @@ subsetCommunication <- function(object = NULL, net = NULL, slot.name = "net",
         LR <- object@LR[[i]]$LRsig
         cells.level <- levels(object@idents[[i]])
 
-        df.net[[i]] <- subsetCommunication_internal(net, LR, cells.level, slot.name = slot.name,
-                                                    sources.use = sources.use, targets.use = targets.use,
-                                                    signaling = signaling,
-                                                    pairLR.use = pairLR.use,
-                                                    thresh = thresh,
-                                                    datasets = datasets, ligand.pvalues = ligand.pvalues, ligand.logFC = ligand.logFC, ligand.pct.1 = ligand.pct.1, ligand.pct.2 = ligand.pct.2,
-                                                    receptor.pvalues = receptor.pvalues, receptor.logFC = receptor.logFC, receptor.pct.1 = receptor.pct.1, receptor.pct.2 =receptor.pct.2)
+        # a dataset without any interaction of interest should not prevent the comparison with the other datasets
+        df.net.i <- tryCatch({
+          subsetCommunication_internal(net, LR, cells.level, slot.name = slot.name,
+                                       sources.use = sources.use, targets.use = targets.use,
+                                       signaling = signaling,
+                                       pairLR.use = pairLR.use,
+                                       thresh = thresh,
+                                       datasets = datasets, ligand.pvalues = ligand.pvalues, ligand.logFC = ligand.logFC, ligand.pct.1 = ligand.pct.1, ligand.pct.2 = ligand.pct.2,
+                                       receptor.pvalues = receptor.pvalues, receptor.logFC = receptor.logFC, receptor.pct.1 = receptor.pct.1, receptor.pct.2 =receptor.pct.2)
+        }, error = function(e) {
+          if (grepl("No significant signaling interactions", conditionMessage(e))) {
+            message("No significant signaling interactions are inferred in the dataset ", names(net0)[i], " based on the input!")
+            return(NULL)
+          }
+          stop(e)
+        })
+        if (!is.null(df.net.i)) {
+          df.net[[i]] <- df.net.i
+        }
+      }
+      idx.empty <- which(sapply(df.net, is.null))
+      if (length(idx.empty) == length(df.net)) {
+        stop("No significant signaling interactions are inferred based on the input!")
+      }
+      for (i in idx.empty) {
+        df.net[[i]] <- df.net[[setdiff(seq_along(df.net), idx.empty)[1]]][0, , drop = FALSE]
       }
     } else {
       LR <- data.frame()
@@ -2443,6 +2476,7 @@ netAnalysis_diff_signalingRole_scatter <- function(object, color.use = NULL, com
     stop("This function cannot be applied to a single cellchat object from one dataset!")
   }
 
+  checkPairwiseComparison(comparison, length(object@net))
   dataset.name <- names(object@net)
   message(paste0("Visualizing differential outgoing and incoming signaling changes from ", dataset.name[comparison[1]], " to ", dataset.name[comparison[2]]))
   title <- paste0("Signaling changes ", " (", dataset.name[comparison[1]], " vs. ", dataset.name[comparison[2]], ")")
@@ -2604,6 +2638,7 @@ netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use =
     object <- mergeCellChat(object, add.names = names(object))
   }
   if (is.list(object@net[[1]])) {
+    checkPairwiseComparison(comparison, length(object@net))
     dataset.name <- names(object@net)
     message(paste0("Visualizing differential outgoing and incoming signaling changes from ", dataset.name[comparison[1]], " to ", dataset.name[comparison[2]]))
     title <- paste0("Signaling changes of ", idents.use, " (", dataset.name[comparison[1]], " vs. ", dataset.name[comparison[2]], ")")

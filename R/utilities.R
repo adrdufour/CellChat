@@ -1325,3 +1325,27 @@ preProcMultiomics <- function(data.list, db, do.sparse = TRUE) {
 
 
                     
+
+
+#' Check that exactly two datasets are given for a pairwise comparison
+#'
+#' Functions showing differences between two datasets (e.g., `netVisual_diffInteraction`) only use the first two values of `comparison`.
+#' With three or more conditions, these functions should be run for each pair of datasets, e.g., comparison = c(1,2), c(1,3) and c(2,3).
+#'
+#' @param comparison a numerical vector giving the datasets for comparison
+#' @param n.datasets the number of datasets in the merged object
+#' @return invisible NULL; raises an error if `comparison` is not valid
+#' @keywords internal
+checkPairwiseComparison <- function(comparison, n.datasets) {
+  if (length(comparison) != 2) {
+    pairs <- utils::combn(seq_len(max(n.datasets, 2)), 2)
+    pairs <- paste0("c(", pairs[1, ], ",", pairs[2, ], ")", collapse = ", ")
+    stop("This function compares exactly two datasets, but `comparison` contains ", length(comparison), " values. ",
+         "For more than two conditions, please run it for each pair of datasets, e.g., comparison = ", pairs, ". ",
+         "Use `rankNet`, `netVisual_bubble` or `compareInteractions` to compare all the conditions at once.", call. = FALSE)
+  }
+  if (!is.numeric(comparison) || any(comparison < 1) || any(comparison > n.datasets) || comparison[1] == comparison[2]) {
+    stop("`comparison` should contain the indices of two different datasets among 1:", n.datasets, call. = FALSE)
+  }
+  invisible(NULL)
+}
