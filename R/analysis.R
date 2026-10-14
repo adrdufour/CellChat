@@ -963,7 +963,7 @@ rankSimilarity <- function(object, slot.name = "netP", type = c("functional","st
   df$name <- factor(df$name, levels = as.character(df$name))
 
   gg <- ggplot(df, aes(x=name, y=dist)) + geom_bar(stat="identity",width = bar.w) +
-    theme_classic() + theme(text=element_text(size=font.size),axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.y = element_text(size=font.size)) +
+    themeCellChatOr(theme_classic(), base_size = font.size) + theme(text=element_text(size=font.size),axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.y = element_text(size=font.size)) +
     xlab("") + ylab("Pathway distance") + coord_flip()#+
   if (!is.null(title)) {
     gg <- gg + ggtitle(title)+ theme(plot.title = element_text(hjust = 0.5))
@@ -1115,7 +1115,7 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
     }
 
     gg <- ggplot(df, aes(x=name, y=contribution.scaled)) + geom_bar(stat="identity",width = bar.w) +
-      theme_classic() + theme(axis.text=element_text(size=font.size),axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.y = element_text(size=10)) +
+      themeCellChatOr(theme_classic(), base_size = font.size) + theme(axis.text=element_text(size=font.size),axis.text.x = element_blank(), axis.ticks.x = element_blank(), axis.title.y = element_text(size=10)) +
       xlab("") + ylab(ylabel) + coord_flip()#+
     if (!is.null(title)) {
       gg <- gg + ggtitle(title)+ theme(plot.title = element_text(hjust = 0.5))
@@ -1224,7 +1224,7 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
     df$group <- factor(df$group, levels = object.names.comparison)
 
     if (is.null(color.use)) {
-      color.use <- ggPalette(n.comparison)
+      color.use <- datasetPalette(n.comparison)
     }
     if (length(color.use) < n.comparison) {
       stop("The number of colors in `color.use` should be at least the number of compared datasets!")
@@ -1344,7 +1344,7 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
         gg <- gg + xlab("") + ylab("Relative number of interactions")
       }
       # dashed line(s) showing an equal contribution of all datasets
-      gg <- gg + geom_hline(yintercept = seq_len(n.comparison-1)/n.comparison, linetype="dashed", color = "grey50", size=0.5)
+      gg <- gg + geom_hline(yintercept = seq_len(n.comparison-1)/n.comparison, linetype="dashed", color = "grey50", size = ifelse(usePublicationStyle(), 0.3, 0.5))
     } else {
       if (show.raw) {
         gg <- ggplot(df, aes(x=name, y=contribution, fill = group)) + geom_bar(stat="identity",width = bar.w, position = position_dodge(0.8)) +
@@ -1363,7 +1363,11 @@ rankNet <- function(object, slot.name = "netP", measure = c("weight","count"), m
                        rel_heights = rel_heights)
       }
     }
-    gg <- gg +  CellChat_theme_opts() + theme_classic()
+    gg <- gg + themeCellChatOr(CellChat_theme_opts() + theme_classic(), base_size = font.size)
+    if (usePublicationStyle()) {
+      # bars start at the axis
+      gg <- gg + scale_y_continuous(expand = expansion(mult = c(0, ifelse(stacked, 0, 0.05))))
+    }
     if (do.flip) {
       gg <- gg + coord_flip() + theme(axis.text.y = element_text(colour = colors.text))
       if (is.null(x.angle)) {
@@ -1453,7 +1457,7 @@ compareInteractions <- function(object, measure = c("count", "weight"), color.us
   }
 
   if (is.null(color.use)) {
-    color.use <- ggPalette(length(unique(group)))
+    color.use <- datasetPalette(length(unique(group)))
   }
   #   theme_classic() #+ scale_x_discrete(limits = (levels(df$x)))
   if (!is.null(group.facet)) {
@@ -1476,8 +1480,11 @@ compareInteractions <- function(object, measure = c("count", "weight"), color.us
     gg <- ggplot(df, aes(x=dataset, y=count, fill = group)) +
       geom_bar(stat="identity", width=width, position=position_dodge())
   }
-  gg <- gg + geom_text(aes(label=count), vjust=-0.3, size=3, position = position_dodge(0.9))
-  gg <- gg + ylab(ylabel) + xlab(xlabel) + theme_classic() +
+  gg <- gg + geom_text(aes(label=count), vjust=-0.3, size = ifelse(usePublicationStyle(), (size.text - 1)/ggplot2::.pt, 3), position = position_dodge(0.9))
+  if (usePublicationStyle()) {
+    gg <- gg + scale_y_continuous(expand = expansion(mult = c(0, 0.1)))
+  }
+  gg <- gg + ylab(ylabel) + xlab(xlabel) + themeCellChatOr(theme_classic(), base_size = size.text) +
     labs(title = title.name) +  theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)) +
     theme(text = element_text(size = size.text), axis.text = element_text(colour="black"))
   gg <- gg + scale_fill_manual(values = alpha(color.use, alpha = color.alpha), drop = FALSE)
@@ -2612,7 +2619,7 @@ netAnalysis_diff_signalingRole_scatter <- function(object, color.use = NULL, com
       geom_point(aes(colour = labels, fill = labels), size = dot.size)
   }
 
-  gg <- gg + CellChat_theme_opts() + theme_linedraw() +theme(panel.grid = element_blank()) +
+  gg <- gg + themeCellChatOr(CellChat_theme_opts() + theme_linedraw() + theme(panel.grid = element_blank()), base_size = font.size, border = TRUE) +
     geom_hline(yintercept=0,linetype="dashed", color = "grey50", size = 0.25) + geom_vline(xintercept=0, linetype="dashed", color = "grey50",size = 0.25) +
     theme(text = element_text(size = font.size), legend.key.height = grid::unit(0.15, "in"))+
     # guides(colour = guide_legend(override.aes = list(size = 3)))+
@@ -2685,11 +2692,14 @@ netAnalysis_diff_signalingRole_scatter <- function(object, color.use = NULL, com
 #' @return ggplot object
 #' @export
 #'
-netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use = c("grey10", "#F8766D", "#00BFC4"), comparison = c(1,2), signaling = NULL, signaling.label = NULL, top.label = 1, signaling.exclude = NULL, xlims = NULL, ylims = NULL,slot.name = "netP", dot.size = 2.5, point.shape = c(21, 22, 24, 23), label.size = 3, dot.alpha = 0.6,
+netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use = NULL, comparison = c(1,2), signaling = NULL, signaling.label = NULL, top.label = 1, signaling.exclude = NULL, xlims = NULL, ylims = NULL,slot.name = "netP", dot.size = 2.5, point.shape = c(21, 22, 24, 23), label.size = 3, dot.alpha = 0.6,
                                                  x.measure = "outdeg", y.measure = "indeg", xlabel = "Differential outgoing interaction strength", ylabel = "Differential incoming interaction strength", title = NULL,
                                                  font.size = 10, font.size.title = 10, do.label = T, show.legend = T, show.axes = T) {
   if (is.list(object)) {
     object <- mergeCellChat(object, add.names = names(object))
+  }
+  if (is.null(color.use)) {
+    color.use <- if (usePublicationStyle()) c("grey30", datasetPalette(2)) else c("grey10", "#F8766D", "#00BFC4")
   }
   if (is.list(object@net[[1]])) {
     checkPairwiseComparison(comparison, length(object@net))
@@ -2795,7 +2805,7 @@ netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use =
   df$labels <- rownames(df)
   gg <- ggplot(data = df, aes(outgoing, incoming)) +
     geom_point(aes(colour = specificity, fill = specificity, shape = specificity.out.in), size = dot.size)
-  gg <- gg + theme_linedraw() +theme(panel.grid = element_blank()) +
+  gg <- gg + themeCellChatOr(theme_linedraw() + theme(panel.grid = element_blank()), base_size = font.size, border = TRUE) +
     geom_hline(yintercept=0,linetype="dashed", color = "grey50", size = 0.25) + geom_vline(xintercept=0, linetype="dashed", color = "grey50",size = 0.25) +
     theme(text = element_text(size = font.size), legend.key.height = grid::unit(0.15, "in"))+
     # guides(colour = guide_legend(override.aes = list(size = 3)))+

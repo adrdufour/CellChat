@@ -14,6 +14,13 @@
 - `netMappingDEG` now also returns `ligand.pvalues.adj` and `receptor.pvalues.adj`; `subsetCommunication` gains `ligand.pvalues.adj`, `receptor.pvalues.adj` and `logFC.abs` (threshold on |logFC|, keeping the genes strongly up- or down-regulated).
 - `rankNet`: new `min.fc` (remove signaling with a fold change of the information flow below `min.fc` between conditions) and `signif.only` (with `do.stat = TRUE`); `netVisual_bubble`: new `min.fc` in comparison mode.
 
+## Biological replicates
+- `identifyOverExpressedGenes(group.replicate = "orig.ident")`: differential expression between conditions at the level of the biological replicates (pseudobulk per replicate and cell group), using limma (`replicate.method = "limma"`, recommended) or a Welch t-test; `paired.replicate = TRUE` for paired designs (same donors in the conditions); `min.cells.replicate` sets the minimum number of cells of a replicate in a cell group. The output is compatible with `netMappingDEG`/`subsetCommunication`.
+
+## Publication-ready figures
+- New `theme_cellchat()` (black text, thin axes, compact legends) and colorblind-friendly `datasetPalette()` (Okabe-Ito), used by default by `rankNet`, `compareInteractions`, `netVisual_bubble` (viridis color scale), `netAnalysis_signalingRole_scatter`, `netAnalysis_diff_signalingRole_scatter`, `netAnalysis_signalingChanges_scatter`, `rankSimilarity`, `netVisual_barplot` and the embedding plots.
+- `options(CellChat.publication = FALSE)` restores the original style (identical rendering).
+
 ## Statistical validity
 - `identifyOverExpressedGenes` (presto, default `do.fast = TRUE`) with `group.dataset`: each gene was reported twice per cell group, and with `only.pos = TRUE` the genes up-regulated in the *other* condition were kept with a positive logFC. Only `pos.dataset` vs. the other condition(s) is now reported.
 - `netMappingDEG`: the p-value of a complex was the mean of the p-values of its subunits, which is not a valid p-value. It is now the maximum p-value (`variable.all = TRUE`, which also requires all the subunits to be differentially expressed) or the Bonferroni-corrected minimum p-value (`variable.all = FALSE`).

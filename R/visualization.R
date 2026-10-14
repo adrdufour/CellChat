@@ -6,6 +6,9 @@
 #' @examples
 #' @importFrom ggplot2 theme_classic element_rect theme element_blank element_line element_text
 CellChat_theme_opts <- function() {
+  if (usePublicationStyle()) {
+    return(theme_cellchat())
+  }
   theme(strip.background = element_rect(colour = "white", fill = "white")) +
     theme_classic() +
     theme(panel.border = element_blank()) +
@@ -17,6 +20,96 @@ CellChat_theme_opts <- function() {
     theme(legend.key = element_blank()) + theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5))
 }
 
+
+#' Publication-ready ggplot theme used in CellChat
+#'
+#' A sober theme for figures in scientific articles: black text, thin axis lines and ticks, no background grid, compact legends.
+#' It is used by default by the comparison plots of CellChat (e.g., `rankNet`, `compareInteractions`, `netVisual_bubble`, the signaling role scatter plots).
+#' Set `options(CellChat.publication = FALSE)` to go back to the original CellChat style.
+#'
+#' @param base_size base font size in pt; 7-8 pt is the usual size of the text in a printed figure
+#' @param base_family base font family
+#' @param border whether to draw a panel border instead of the x and y axis lines
+#' @return a ggplot2 theme
+#' @importFrom ggplot2 theme_classic theme element_text element_line element_rect element_blank margin %+replace%
+#' @importFrom grid unit
+#' @export
+#' @examples
+#' \dontrun{
+#' gg <- rankNet(cellchat, comparison = c(1,2,3)) + theme_cellchat(base_size = 7)
+#' ggplot2::ggsave("rankNet.pdf", gg, width = 85, height = 90, units = "mm")
+#' }
+theme_cellchat <- function(base_size = 8, base_family = "", border = FALSE) {
+  line.width <- 0.3
+  el_line <- function(...) {
+    if (utils::packageVersion("ggplot2") >= "3.4.0") element_line(linewidth = line.width, ...) else element_line(size = line.width, ...)
+  }
+  el_rect <- function(...) {
+    if (utils::packageVersion("ggplot2") >= "3.4.0") element_rect(linewidth = line.width * 1.5, ...) else element_rect(size = line.width * 1.5, ...)
+  }
+  th <- theme_classic(base_size = base_size, base_family = base_family) %+replace%
+    theme(text = element_text(colour = "black", size = base_size, family = base_family),
+          axis.text = element_text(colour = "black", size = base_size),
+          axis.title = element_text(colour = "black", size = base_size + 1),
+          axis.line = el_line(colour = "black"),
+          axis.ticks = el_line(colour = "black"),
+          axis.ticks.length = grid::unit(2, "pt"),
+          panel.background = element_blank(),
+          plot.background = element_blank(),
+          panel.grid = element_blank(),
+          strip.background = element_blank(),
+          strip.text = element_text(colour = "black", size = base_size + 1, face = "bold", margin = margin(b = 3)),
+          legend.background = element_blank(),
+          legend.key = element_blank(),
+          legend.key.size = grid::unit(3, "mm"),
+          legend.title = element_text(colour = "black", size = base_size, hjust = 0),
+          legend.text = element_text(colour = "black", size = base_size - 1),
+          plot.title = element_text(colour = "black", size = base_size + 2, face = "bold", hjust = 0.5, margin = margin(b = 6)),
+          plot.margin = margin(5, 5, 5, 5))
+  if (border) {
+    th <- th + theme(axis.line = element_blank(), panel.border = el_rect(colour = "black", fill = NA))
+  }
+  th
+}
+
+#' Whether the publication style of the figures is used
+#'
+#' The publication style (`theme_cellchat` and the colorblind-friendly `datasetPalette`) is used by default.
+#' Set `options(CellChat.publication = FALSE)` to use the original CellChat style.
+#' @return a logical value
+#' @keywords internal
+usePublicationStyle <- function() {
+  isTRUE(getOption("CellChat.publication", TRUE))
+}
+
+#' Apply the publication theme or the original theme of a plot
+#' @param default.theme the original theme
+#' @param base_size,border see `theme_cellchat`
+#' @keywords internal
+themeCellChatOr <- function(default.theme, base_size = 8, border = FALSE) {
+  if (usePublicationStyle()) theme_cellchat(base_size = base_size, border = border) else default.theme
+}
+
+#' Colorblind-friendly colors for datasets/conditions
+#'
+#' Colors from the Okabe-Ito palette, distinguishable by people with color vision deficiencies and readable in grayscale prints.
+#' They are used by default for the datasets in the comparison plots; `ggPalette` is used instead when `options(CellChat.publication = FALSE)`.
+#'
+#' @param n number of colors
+#' @return a vector of colors
+#' @importFrom grDevices colorRampPalette
+#' @export
+datasetPalette <- function(n) {
+  if (!usePublicationStyle()) {
+    return(ggPalette(n))
+  }
+  colorSpace <- c("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#F0E442", "#999999")
+  if (n <= length(colorSpace)) {
+    colorSpace[seq_len(n)]
+  } else {
+    grDevices::colorRampPalette(colorSpace)(n)
+  }
+}
 
 #' Generate ggplot2 colors
 #'
@@ -2168,6 +2261,10 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
                              title.name = NULL, font.size = 10, font.size.title = 10, show.legend = TRUE,
                              grid.on = TRUE, color.grid = "grey90", angle.x = 90, vjust.x = NULL, hjust.x = NULL,
                              return.data = FALSE){
+  if (missing(color.heatmap) && usePublicationStyle()) {
+    # perceptually uniform and colorblind-friendly color scale
+    color.heatmap <- "viridis"
+  }
   color.heatmap <- match.arg(color.heatmap)
   if (is.list(object@net[[1]])) {
     message("Comparing communications on a merged object \n")
@@ -2464,7 +2561,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
 
   g <- ggplot(df, aes(x = source.target, y = interaction_name_2, color = prob, size = pval_categorie)) +
     geom_point(pch = 16) +
-    theme_linedraw() + theme(panel.grid.major = element_blank()) +
+    themeCellChatOr(theme_linedraw() + theme(panel.grid.major = element_blank()), base_size = font.size, border = TRUE) +
     theme(axis.text.x = element_text(angle = angle.x, hjust= hjust.x, vjust = vjust.x),
           axis.title.x = element_blank(),
           axis.title.y = element_blank()) +
@@ -2489,7 +2586,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
   }
 
   g <- g + theme(text = element_text(size = font.size),plot.title = element_text(size=font.size.title)) +
-    theme(legend.title = element_text(size = 8), legend.text = element_text(size = 6))
+    theme(legend.title = element_text(size = ifelse(usePublicationStyle(), font.size, 8)), legend.text = element_text(size = ifelse(usePublicationStyle(), font.size - 1, 6)))
 
   if (grid.on) {
     if (length(unique(df$source.target)) > 1) {
@@ -2518,7 +2615,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
         names(group) <- dataset.name[comparison]
       }
       if (is.null(color.text)) {
-        color <- ggPalette(length(unique(group)))
+        color <- datasetPalette(length(unique(group)))
       } else {
         color <- color.text
       }
@@ -4323,7 +4420,7 @@ barplot_internal <- function(df, x = "cellType", y = "value", fill = "condition"
   gg <- ggplot(df, aes_string(x=x, y=y, fill = fill, color = fill)) + geom_bar(stat="identity", width=width, position=position_dodge()) +
     theme_classic() + scale_x_discrete(limits = (levels(df$x))) + theme(axis.text.x = element_text(angle = 45, hjust = 1,size=10))
 
-  gg <- gg + ylab(ylabel) + xlab(xlabel) + theme_classic() +
+  gg <- gg + ylab(ylabel) + xlab(xlabel) + themeCellChatOr(theme_classic()) +
     labs(title = title.name) +  theme(plot.title = element_text(size = 10, face = "bold", hjust = 0.5)) +
     theme(text = element_text(size = size.text), axis.text = element_text(colour="black"))
   if (!is.null(color.use)) {
