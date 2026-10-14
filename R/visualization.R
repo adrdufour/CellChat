@@ -2115,6 +2115,8 @@ netVisual_barplot <- function(object, comparison = c(1,2), measure = c("count", 
 #' @param remove.isolate whether to remove the entire empty columns, i.e., communication between certain cell groups
 #' @param max.dataset a scale, keeping the communications with highest probability in max.dataset (i.e., certrain condition)
 #' @param min.dataset a scale, keeping the communications with lowest probability in min.dataset (i.e., certrain condition)
+#' @param min.fc a minimum fold change of the communication probability between the datasets (highest vs. second highest one) when doing comparison analysis, e.g., min.fc = 1.5.
+#' The communications that are similar between datasets are removed, as well as the L-R pairs without any remaining communication. Default = NULL (no filtering)
 #' @param min.quantile,max.quantile minimum and maximum quantile cutoff values for the colorbar, may specify quantile in [0,1]
 #' @param line.on whether to add vertical line when doing comparison analysis for the merged object
 #' @param line.size size of vertical line if added
@@ -2161,7 +2163,7 @@ netVisual_barplot <- function(object, comparison = c(1,2), measure = c("count", 
 #' netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:8), remove.isolate = TRUE, max.dataset = 1)
 #'}
 netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, signaling = NULL, pairLR.use = NULL, sort.by.source = FALSE, sort.by.target = FALSE, sort.by.source.priority = TRUE, color.heatmap = c("Spectral","viridis"), n.colors = 10, direction = -1, thresh = 0.05,
-                             comparison = NULL, group = NULL, remove.isolate = FALSE, max.dataset = NULL, min.dataset = NULL,
+                             comparison = NULL, group = NULL, remove.isolate = FALSE, max.dataset = NULL, min.dataset = NULL, min.fc = NULL,
                              min.quantile = 0, max.quantile = 1, line.on = TRUE, line.size = 0.2, color.text.use = TRUE, color.text = NULL, dot.size.min = NULL, dot.size.max = NULL,
                              title.name = NULL, font.size = 10, font.size.title = 10, show.legend = TRUE,
                              grid.on = TRUE, color.grid = "grey90", angle.x = 90, vjust.x = NULL, hjust.x = NULL,
@@ -2359,6 +2361,27 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
   if (remove.isolate) {
     df <- df[!is.na(df$prob), ]
     line.on <- FALSE
+  }
+  if (!is.null(min.fc)) {
+    if (is.null(comparison) || length(comparison) < 2) {
+      message("`min.fc` is only used when comparing datasets with `comparison`")
+    } else {
+      # fold change between the highest and the second highest communication probability of each L-R pair and cell pair
+      prob.raw <- df$prob.original
+      prob.raw[is.na(prob.raw)] <- 0
+      key <- paste(df$interaction_name_2, df$group.names, sep = "__")
+      fc <- tapply(prob.raw, key, function(x) {
+        x <- sort(c(x, rep(0, max(0, length(comparison) - length(x)))), decreasing = TRUE)
+        x[1]/x[2]
+      })
+      keep <- fc[key] >= min.fc
+      df$prob[is.na(keep) | !keep] <- NA
+      df <- df[df$interaction_name_2 %in% unique(df$interaction_name_2[!is.na(df$prob)]), , drop = FALSE]
+      if (nrow(df) == 0) {
+        stop("No communications with a fold change larger than `min.fc` between datasets. Please consider decreasing `min.fc`. ")
+      }
+      df$interaction_name_2 <- droplevels(df$interaction_name_2)
+    }
   }
   if (!is.null(max.dataset)) {
     # line.on <- FALSE

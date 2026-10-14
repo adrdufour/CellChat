@@ -341,7 +341,7 @@ subsetData <- function(object, features = NULL) {
 #' Identify over-expressed signaling genes associated with each cell group
 #'
 #' USERS can use customized gene set as over-expressed signaling genes by setting `object@var.features[[features.name]] <- features.sig`
-#' The Bonferroni corrected/adjusted p value can be obtained via `object@var.features[[paste0(features.name, ".info")]]`. Note that by default `features.name = "features"`
+#' The adjusted p value (see `p.adjust.method`) can be obtained via `object@var.features[[paste0(features.name, ".info")]]`. Note that by default `features.name = "features"`
 #'
 #' @param object CellChat object
 #' @param data.use a customed data matrix. Default: data.use = NULL and the expression matrix in the slot 'data.signaling' is used
@@ -357,9 +357,15 @@ subsetData <- function(object, features = NULL) {
 #' @param only.pos Only return positive markers
 #' @param features features used for identifying Over Expressed genes. default use all features
 #' @param return.object whether to return the object; otherwise return a data frame consisting of over-expressed signaling genes associated with each cell group
+#' @param neg.dataset the dataset name(s) compared to `pos.dataset`. Default = NULL: all the other datasets are pooled together.
+#' When analyzing three or more conditions, setting e.g. pos.dataset = "TrtA" and neg.dataset = "Ctrl" performs the comparison TrtA vs. Ctrl only, ignoring the cells from the other conditions.
 #' @param thresh.pc Threshold of the fraction of cells expressed in one cluster, i.e., thresh.pc = 0.1
-#' @param thresh.fc Threshold of Log Fold Change, i.e., thresh.pc = 0.1
-#' @param thresh.p Threshold of p-values, i.e., thresh.pc = 0.05
+#' @param thresh.fc Threshold of Log Fold Change, i.e., thresh.fc = 0.1. Increase it (e.g., thresh.fc = 0.25) to remove the genes that are only slightly different between groups or conditions
+#' @param thresh.p Threshold of p-values, i.e., thresh.p = 0.05. NB: this threshold is applied to the raw (non-adjusted) p-values; see `thresh.p.adj`
+#' @param thresh.p.adj Threshold of the p-values adjusted for multiple testing (column `pvalues.adj`), i.e., thresh.p.adj = 0.05. Default = NULL (no filtering on adjusted p-values, as in the previous versions).
+#' Using thresh.p.adj is recommended: with thousands of genes tested in each cell group, filtering on raw p-values only keeps many false positives.
+#' @param p.adjust.method the method used to adjust the p-values for multiple testing within each cell group (see `stats::p.adjust`); Default = "BH" (false discovery rate).
+#' NB: when comparing conditions, cells are considered as independent observations (no biological replicates), which makes the p-values over-optimistic; effect size thresholds (`thresh.fc`, `thresh.pc`) are therefore important.
 #' @param do.DE Whether to perform differential expression analysis. By default do.DE = TRUE; When do.DE = FALSE, selecting over-expressed genes that are expressed in more than `min.cells` cells.
 #' @param do.fast If do.fast = TRUE, then perform a ultra-fast Wilcoxon test using presto package; otherwise using stats package. These two methods produce different logFC values, and the presto::wilcoxauc method gives smaller values.
 #' @param min.cells the minmum number of expressed cells required for the genes that are considered for cell-cell communication analysis
@@ -374,9 +380,11 @@ subsetData <- function(object, features = NULL) {
 #' @export
 #'
 identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL, idents.use = NULL, invert = FALSE,
-                                       group.dataset = NULL, pos.dataset = NULL, group.DE.combined = FALSE,
+                                       group.dataset = NULL, pos.dataset = NULL, neg.dataset = NULL, group.DE.combined = FALSE,
                                        features.name = "features",  only.pos = TRUE, features = NULL, return.object = TRUE,
-                                       thresh.pc = 0, thresh.fc = 0, thresh.p = 0.05, do.DE = TRUE, do.fast = TRUE, min.cells = 10) {
+                                       thresh.pc = 0, thresh.fc = 0, thresh.p = 0.05, thresh.p.adj = NULL, p.adjust.method = "BH",
+                                       do.DE = TRUE, do.fast = TRUE, min.cells = 10) {
+  p.adjust.method <- match.arg(p.adjust.method, stats::p.adjust.methods)
   if (!is.list(object@var.features)) {
     stop("Please update your CellChat object via `updateCellChat()`")
   }
@@ -426,8 +434,23 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
         cat("Please set pos.dataset to be one of the following dataset names: ", unique(as.character(labels.dataset)))
         stop()
       }
+      if (!is.null(neg.dataset)) {
+        if (!all(neg.dataset %in% unique(labels.dataset)) || pos.dataset %in% neg.dataset) {
+          stop("Please set neg.dataset to be one or several of the following dataset names (different from pos.dataset): ", toString(setdiff(unique(labels.dataset), pos.dataset)))
+        }
+        # only keep the cells from the two compared conditions
+        cells.keep <- which(labels.dataset %in% c(pos.dataset, neg.dataset))
+        data.use <- data.use[, cells.keep, drop = FALSE]
+        labels <- droplevels(labels[cells.keep])
+        labels.dataset <- labels.dataset[cells.keep]
+        level.use <- level.use[level.use %in% unique(labels)]
+        numCluster <- length(level.use)
+      }
       labels.dataset[labels.dataset != pos.dataset] <- toString(setdiff(unique(labels.dataset), pos.dataset))
       labels.dataset <- factor(labels.dataset, levels = c(pos.dataset, setdiff(unique(labels.dataset), pos.dataset)))
+      if (nlevels(labels.dataset) < 2) {
+        stop("No cells from other datasets than `pos.dataset` are available for the comparison!")
+      }
     }
 
     if (do.fast) {
@@ -441,48 +464,64 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
           "\n Otherwise, plase set `do.fast = FALSE` for running the standard Wilcoxon Test!\n"
         )
       }
+      rename.presto <- function(x, group.name) {
+        colnames(x) <- plyr::mapvalues(colnames(x),from = c("group","feature","pval","logFC","pct_in","pct_out","padj"), to = c(group.name,"features","pvalues","logFC","pct.1", "pct.2","pvalues.adj"), warn_missing = FALSE)
+        x
+      }
       if (is.null(group.dataset)) {
         genes.de <- presto::wilcoxauc(data.use, labels, groups_use = level.use)
-        colnames(genes.de) <- plyr::mapvalues(colnames(genes.de),from = c("group","feature","pval","logFC","pct_in","pct_out","padj"), to = c("clusters","features","pvalues","logFC","pct.1", "pct.2","pvalues.adj"), warn_missing = TRUE)
-        genes.de$logFC_abs <- abs(genes.de$logFC)
-        pct.max <- apply(genes.de[, c("pct.1", "pct.2"), drop = FALSE], MARGIN = 1, FUN = max)
-        genes.de$pct.max <- pct.max
-        markers.all <- dplyr::filter(genes.de, pvalues < thresh.p, logFC_abs >= thresh.fc, pct.max > thresh.pc*100) %>% arrange(pvalues)
-
+        genes.de <- rename.presto(genes.de, "clusters")
+        # adjust the p-values within each cell group
+        genes.de$pvalues.adj <- stats::ave(genes.de$pvalues, genes.de$clusters, FUN = function(x) stats::p.adjust(x, method = p.adjust.method))
       } else if ((!is.null(group.dataset)) & (group.DE.combined == FALSE)) {
         genes.de <- data.frame()
         for (i in 1:numCluster) {
           idx <- which(labels == level.use[i])
-          data.use.i <- data.use[ ,idx]
-          labels.i <- labels.dataset[idx]
-          genes.de.i <- presto::wilcoxauc(data.use.i, labels.i)
-          # genes.de.i <- genes.de.i[1:(nrow(genes.de.i)/2),]
+          labels.i <- droplevels(labels.dataset[idx])
+          if (nlevels(labels.i) < 2) {
+            next
+          }
+          genes.de.i <- presto::wilcoxauc(data.use[ ,idx, drop = FALSE], labels.i)
+          # presto returns the results of each dataset vs. the others; keep `pos.dataset` vs. the other dataset(s) only,
+          # otherwise each gene is reported twice and the genes up-regulated in the other dataset get a positive logFC
+          genes.de.i <- genes.de.i[genes.de.i$group == pos.dataset, , drop = FALSE]
           genes.de.i$clusters <- level.use[i]
+          genes.de.i$padj <- stats::p.adjust(genes.de.i$pval, method = p.adjust.method)
           genes.de <- rbind(genes.de, genes.de.i)
         }
-        colnames(genes.de) <- plyr::mapvalues(colnames(genes.de),from = c("group","feature","pval","logFC","pct_in","pct_out","padj"), to = c("datasets","features","pvalues","logFC","pct.1", "pct.2","pvalues.adj"), warn_missing = TRUE)
-        genes.de$logFC_abs <- abs(genes.de$logFC)
-        pct.max <- apply(genes.de[, c("pct.1", "pct.2"), drop = FALSE], MARGIN = 1, FUN = max)
-        genes.de$pct.max <- pct.max
-        markers.all <- dplyr::filter(genes.de, pvalues < thresh.p, logFC_abs >= thresh.fc, pct.max > thresh.pc*100)
-        markers.all$datasets <- factor(markers.all$datasets, levels = levels(labels.dataset))
-        markers.all <- markers.all[order(markers.all$datasets, markers.all$pvalues, -markers.all$logFC), ]
+        genes.de <- rename.presto(genes.de, "datasets")
       } else if ((!is.null(group.dataset)) & (group.DE.combined == TRUE)) {
         genes.de.c <- presto::wilcoxauc(data.use, labels.dataset)
-        genes.de.c <- genes.de.c[1:(nrow(genes.de.c)/2),]
+        genes.de.c <- genes.de.c[genes.de.c$group == pos.dataset, , drop = FALSE]
+        genes.de.c$padj <- stats::p.adjust(genes.de.c$pval, method = p.adjust.method)
         genes.de <- data.frame()
         for (i in 1:numCluster) {
           genes.de.c$clusters <- level.use[i]
           genes.de <- rbind(genes.de, genes.de.c)
         }
-        colnames(genes.de) <- plyr::mapvalues(colnames(genes.de),from = c("group","feature","pval","logFC","pct_in","pct_out","padj"), to = c("datasets","features","pvalues","logFC","pct.1", "pct.2","pvalues.adj"), warn_missing = TRUE)
-        genes.de$logFC_abs <- abs(genes.de$logFC)
-        pct.max <- apply(genes.de[, c("pct.1", "pct.2"), drop = FALSE], MARGIN = 1, FUN = max)
-        genes.de$pct.max <- pct.max
-        markers.all <- dplyr::filter(genes.de, pvalues < thresh.p, logFC_abs >= thresh.fc, pct.max > thresh.pc*100) %>% arrange(pvalues)
-
+        genes.de <- rename.presto(genes.de, "datasets")
       }
-      markers.all <- dplyr::select(markers.all, -c("logFC_abs","statistic","pct.max"))
+      if (nrow(genes.de) == 0) {
+        stop("No genes can be tested. Please check the cell groups and the datasets used for the comparison!")
+      }
+      if (!is.null(group.dataset)) {
+        # direction of the change: `pos.dataset` when the gene is up-regulated in `pos.dataset`, otherwise the other dataset(s)
+        genes.de$datasets <- ifelse(genes.de$logFC > 0, pos.dataset, levels(labels.dataset)[2])
+      }
+      genes.de$logFC_abs <- abs(genes.de$logFC)
+      pct.max <- apply(genes.de[, c("pct.1", "pct.2"), drop = FALSE], MARGIN = 1, FUN = max)
+      genes.de$pct.max <- pct.max
+      markers.all <- dplyr::filter(genes.de, pvalues < thresh.p, logFC_abs >= thresh.fc, pct.max > thresh.pc*100)
+      if (!is.null(thresh.p.adj)) {
+        markers.all <- dplyr::filter(markers.all, pvalues.adj < thresh.p.adj)
+      }
+      if (!is.null(group.dataset)) {
+        markers.all$datasets <- factor(markers.all$datasets, levels = levels(labels.dataset))
+        markers.all <- markers.all[order(markers.all$datasets, markers.all$pvalues, -markers.all$logFC), ]
+      } else {
+        markers.all <- markers.all[order(markers.all$pvalues), ]
+      }
+      markers.all <- dplyr::select(markers.all, -dplyr::any_of(c("logFC_abs","statistic","pct.max","group")))
 
       if (only.pos & nrow(markers.all) > 0) {
         markers.all <- subset(markers.all, subset = logFC > 0)
@@ -518,6 +557,9 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
         } else if ((!is.null(group.dataset)) & (group.DE.combined == TRUE)) {
           cell.use1 <- which(labels.dataset == pos.dataset)
           cell.use2 <- which(labels.dataset != pos.dataset)
+        }
+        if (length(cell.use1) == 0 || length(cell.use2) == 0) {
+          next
         }
 
         # feature selection (based on percentages)
@@ -571,10 +613,11 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
           )
         )
 
+        # the genes removed by the pct/logFC pre-filtering are counted as tests (conservative adjustment)
         pval.adj = stats::p.adjust(
           p = pvalues,
-          method = "bonferroni",
-          n = nrow(X)
+          method = p.adjust.method,
+          n = length(features.use)
         )
         genes.de[[i]] <- data.frame(clusters = level.use[i], features = as.character(rownames(data1)), pvalues = pvalues, logFC = FC[features], data.alpha[features,, drop = F],pvalues.adj = pval.adj, stringsAsFactors = FALSE)
       }
@@ -585,6 +628,9 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
         if (!is.null(gde)) {
           gde <- gde[order(gde$pvalues, -gde$logFC), ]
           gde <- subset(gde, subset = pvalues < thresh.p)
+          if (!is.null(thresh.p.adj)) {
+            gde <- subset(gde, subset = pvalues.adj < thresh.p.adj)
+          }
           if (nrow(gde) > 0) {
             markers.all <- rbind(markers.all, gde)
           }
@@ -593,7 +639,7 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
       if (only.pos & nrow(markers.all) > 0) {
         markers.all <- subset(markers.all, subset = logFC > 0)
       }
-      if (!is.null(group.dataset)) {
+      if (!is.null(group.dataset) & nrow(markers.all) > 0) {
         markers.all$datasets[markers.all$logFC > 0] <- pos.dataset
         markers.all$datasets[markers.all$logFC < 0] <- setdiff(unique(labels.dataset), pos.dataset)
         markers.all$datasets <- factor(markers.all$datasets, levels = levels(labels.dataset))

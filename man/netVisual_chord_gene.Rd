@@ -82,7 +82,7 @@ net should have at least three columns: "source","target" and "interaction_name"
 
 \item{thresh}{threshold of the p-value for determining significant interaction when visualizing links at the level of ligands/receptors;}
 
-\item{merge.genes}{whether to show each ligand and each receptor as a single sector. Default = TRUE: the grid track of each gene is then split and colored by the proportion of each source (for ligands) or target (for receptors) cell group, links are colored by the source cell groups, and ligands and receptors are separated by big.gap.
+\item{merge.genes}{whether to show each ligand and each receptor as a single sector. Default = TRUE: the grid track of each gene is then split and colored by the proportion of each source (for ligands) or target (for receptors) cell group, links are colored by the source cell groups, and ligands and receptors are separated by `big.gap`.
 Set merge.genes = FALSE to show one sector per gene and per cell group (the original behavior).}
 
 \item{...}{other parameters to chordDiagram}
