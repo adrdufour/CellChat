@@ -12,6 +12,7 @@ identifyOverExpressedGenes(
   invert = FALSE,
   group.dataset = NULL,
   pos.dataset = NULL,
+  neg.dataset = NULL,
   group.DE.combined = FALSE,
   features.name = "features",
   only.pos = TRUE,
@@ -20,6 +21,8 @@ identifyOverExpressedGenes(
   thresh.pc = 0,
   thresh.fc = 0,
   thresh.p = 0.05,
+  thresh.p.adj = NULL,
+  p.adjust.method = "BH",
   do.DE = TRUE,
   do.fast = TRUE,
   min.cells = 10
@@ -40,6 +43,9 @@ identifyOverExpressedGenes(
 
 \item{pos.dataset}{the dataset name used for identifying highly enriched genes in this dataset for each cell group}
 
+\item{neg.dataset}{the dataset name(s) compared to `pos.dataset`. Default = NULL: all the other datasets are pooled together.
+When analyzing three or more conditions, setting e.g. pos.dataset = "TrtA" and neg.dataset = "Ctrl" performs the comparison TrtA vs. Ctrl only, ignoring the cells from the other conditions.}
+
 \item{group.DE.combined}{Whether to perform differential expression between conditions by ignoring cell group information. By default, group.DE.combined = FALSE, which will perform differential expression analysis between two biological conditions for each cell group;
 When group.DE.combined = TRUE, it will perform DE analysis by combining all cell groups together.}
 
@@ -53,9 +59,15 @@ When group.DE.combined = TRUE, it will perform DE analysis by combining all cell
 
 \item{thresh.pc}{Threshold of the fraction of cells expressed in one cluster, i.e., thresh.pc = 0.1}
 
-\item{thresh.fc}{Threshold of Log Fold Change, i.e., thresh.pc = 0.1}
+\item{thresh.fc}{Threshold of Log Fold Change, i.e., thresh.fc = 0.1. Increase it (e.g., thresh.fc = 0.25) to remove the genes that are only slightly different between groups or conditions}
 
-\item{thresh.p}{Threshold of p-values, i.e., thresh.pc = 0.05}
+\item{thresh.p}{Threshold of p-values, i.e., thresh.p = 0.05. NB: this threshold is applied to the raw (non-adjusted) p-values; see `thresh.p.adj`}
+
+\item{thresh.p.adj}{Threshold of the p-values adjusted for multiple testing (column `pvalues.adj`), i.e., thresh.p.adj = 0.05. Default = NULL (no filtering on adjusted p-values, as in the previous versions).
+Using thresh.p.adj is recommended: with thousands of genes tested in each cell group, filtering on raw p-values only keeps many false positives.}
+
+\item{p.adjust.method}{the method used to adjust the p-values for multiple testing within each cell group (see `stats::p.adjust`); Default = "BH" (false discovery rate).
+NB: when comparing conditions, cells are considered as independent observations (no biological replicates), which makes the p-values over-optimistic; effect size thresholds (`thresh.fc`, `thresh.pc`) are therefore important.}
 
 \item{do.DE}{Whether to perform differential expression analysis. By default do.DE = TRUE; When do.DE = FALSE, selecting over-expressed genes that are expressed in more than `min.cells` cells.}
 
@@ -70,5 +82,5 @@ A CellChat object or a data frame. If returning a CellChat object, two new eleme
 }
 \description{
 USERS can use customized gene set as over-expressed signaling genes by setting `object@var.features[[features.name]] <- features.sig`
-The Bonferroni corrected/adjusted p value can be obtained via `object@var.features[[paste0(features.name, ".info")]]`. Note that by default `features.name = "features"`
+The adjusted p value (see `p.adjust.method`) can be obtained via `object@var.features[[paste0(features.name, ".info")]]`. Note that by default `features.name = "features"`
 }

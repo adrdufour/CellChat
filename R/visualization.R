@@ -1673,6 +1673,7 @@ netVisual_diffInteraction <- function(object, comparison = c(1,2), measure = c("
                                       arrow.width=1,arrow.size = 0.2){
   options(warn = -1)
   measure <- match.arg(measure)
+  checkPairwiseComparison(comparison, length(object@net))
   obj1 <- object@net[[comparison[1]]][[measure]]
   obj2 <- object@net[[comparison[2]]][[measure]]
   net.diff <- obj2 - obj1
@@ -1838,6 +1839,7 @@ netVisual_heatmap <- function(object, comparison = c(1,2), measure = c("count", 
     if (is.null(color.heatmap)) {
       color.heatmap <- c('#2166ac','#b2182b')
     }
+    checkPairwiseComparison(comparison, length(object@net))
     obj1 <- object@net[[comparison[1]]][[measure]]
     obj2 <- object@net[[comparison[2]]][[measure]]
     net.diff <- obj2 - obj1
@@ -2016,6 +2018,7 @@ netVisual_barplot <- function(object, comparison = c(1,2), measure = c("count", 
   slot.name <- match.arg(slot.name)
   if (is.list(object@net[[1]])) {
     message("Show differential number of interactions based on a merged object \n")
+    checkPairwiseComparison(comparison, length(object@net))
     obj1 <- object@net[[comparison[1]]][[measure]]
     obj2 <- object@net[[comparison[2]]][[measure]]
     net.diff <- obj2 - obj1
@@ -2112,6 +2115,8 @@ netVisual_barplot <- function(object, comparison = c(1,2), measure = c("count", 
 #' @param remove.isolate whether to remove the entire empty columns, i.e., communication between certain cell groups
 #' @param max.dataset a scale, keeping the communications with highest probability in max.dataset (i.e., certrain condition)
 #' @param min.dataset a scale, keeping the communications with lowest probability in min.dataset (i.e., certrain condition)
+#' @param min.fc a minimum fold change of the communication probability between the datasets (highest vs. second highest one) when doing comparison analysis, e.g., min.fc = 1.5.
+#' The communications that are similar between datasets are removed, as well as the L-R pairs without any remaining communication. Default = NULL (no filtering)
 #' @param min.quantile,max.quantile minimum and maximum quantile cutoff values for the colorbar, may specify quantile in [0,1]
 #' @param line.on whether to add vertical line when doing comparison analysis for the merged object
 #' @param line.size size of vertical line if added
@@ -2158,7 +2163,7 @@ netVisual_barplot <- function(object, comparison = c(1,2), measure = c("count", 
 #' netVisual_bubble(cellchat, sources.use = 4, targets.use = c(5:8), remove.isolate = TRUE, max.dataset = 1)
 #'}
 netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, signaling = NULL, pairLR.use = NULL, sort.by.source = FALSE, sort.by.target = FALSE, sort.by.source.priority = TRUE, color.heatmap = c("Spectral","viridis"), n.colors = 10, direction = -1, thresh = 0.05,
-                             comparison = NULL, group = NULL, remove.isolate = FALSE, max.dataset = NULL, min.dataset = NULL,
+                             comparison = NULL, group = NULL, remove.isolate = FALSE, max.dataset = NULL, min.dataset = NULL, min.fc = NULL,
                              min.quantile = 0, max.quantile = 1, line.on = TRUE, line.size = 0.2, color.text.use = TRUE, color.text = NULL, dot.size.min = NULL, dot.size.max = NULL,
                              title.name = NULL, font.size = 10, font.size.title = 10, show.legend = TRUE,
                              grid.on = TRUE, color.grid = "grey90", angle.x = 90, vjust.x = NULL, hjust.x = NULL,
@@ -2227,9 +2232,9 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
       df.net <- rbind(df.net, df.net.isolate)
     }
 
-    df.net$pval[df.net$pval > 0.05] = 1
-    df.net$pval[df.net$pval > 0.01 & df.net$pval <= 0.05] = 2
-    df.net$pval[df.net$pval <= 0.01] = 3
+    df.net$pval_categorie <- 1
+    df.net$pval_categorie[df.net$pval > 0.01 & df.net$pval <= 0.05] = 2
+    df.net$pval_categorie[df.net$pval <= 0.01] = 3
     df.net$prob[df.net$prob == 0] <- NA
     df.net$prob.original <- df.net$prob
     df.net$prob <- -1/log(df.net$prob)
@@ -2237,7 +2242,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
     idx1 <- which(is.infinite(df.net$prob) | df.net$prob < 0)
     if (sum(idx1) > 0) {
       values.assign <- seq(max(df.net$prob, na.rm = T)*1.1, max(df.net$prob, na.rm = T)*1.5, length.out = length(idx1))
-      position <- sort(prob.original[idx1], index.return = TRUE)$ix
+      position <- sort(df.net$prob.original[idx1], index.return = TRUE)$ix
       df.net$prob[idx1] <- values.assign[match(1:length(idx1), position)]
     }
     # rownames(df.net) <- df.net$interaction_name_2
@@ -2260,6 +2265,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
                                       pairLR.use = pairLR.use,
                                       thresh = thresh)
     df.all <- data.frame()
+    group.names.all <- c()
     for (ii in 1:length(comparison)) {
       cells.level <- levels(object@idents[[comparison[ii]]])
       if (is.numeric(sources.use)) {
@@ -2290,26 +2296,31 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
       df.net$target <- factor(df.net$target, levels = cells.level[cells.level %in% unique(df.net$target)])
       group.names <- paste(rep(levels(df.net$source), each = length(levels(df.net$target))), levels(df.net$target), sep = " -> ")
       group.names0 <- group.names
+      group.names.all <- union(group.names.all, group.names0)
       group.names <- paste0(group.names0, " (", dataset.name[comparison[ii]], ")")
 
       if (nrow(df.net) > 0) {
         df.net$pval_categorie <- 1
-        df.net$pval_categorie[df.net$pval > 0.05] = 1
         df.net$pval_categorie[df.net$pval > 0.01 & df.net$pval <= 0.05] = 2
         df.net$pval_categorie[df.net$pval <= 0.01] = 3
         df.net$prob[df.net$prob == 0] <- NA
         df.net$prob.original <- df.net$prob
         df.net$prob <- -1/log(df.net$prob)
       } else {
-        df.net <- as.data.frame(matrix(NA, nrow = length(group.names), ncol = 5))
-        colnames(df.net) <- c("interaction_name_2","source.target","prob","pval","prob.original", "pval_categorie")
+        # keep the same columns as the other datasets so that they can be combined
+        df.net <- df.net[rep(NA_integer_, length(group.names0)), , drop = FALSE]
+        rownames(df.net) <- NULL
         df.net$source.target <- group.names0
+        df.net$prob.original <- df.net$prob
+        df.net$pval_categorie <- rep(1, nrow(df.net))
       }
       # df.net$group.names <- sub(paste0(' \\(',dataset.name[comparison[ii]],'\\)'),'',as.character(df.net$source.target))
-      df.net$group.names <- as.character(df.net$source.target)
-      df.net$source.target <- paste0(df.net$source.target, " (", dataset.name[comparison[ii]], ")")
-      df.net$dataset <- dataset.name[comparison[ii]]
-      df.all <- rbind(df.all, df.net)
+      if (nrow(df.net) > 0) {
+        df.net$group.names <- as.character(df.net$source.target)
+        df.net$source.target <- paste0(df.net$source.target, " (", dataset.name[comparison[ii]], ")")
+        df.net$dataset <- dataset.name[comparison[ii]]
+        df.all <- rbind(df.all, df.net)
+      }
     }
     if (nrow(df.all) == 0) {
       stop("No interactions are detected. Please consider changing the cell groups for analysis. ")
@@ -2328,6 +2339,8 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
     df <- with(df, df[order(interaction_name_2),])
     df$interaction_name_2 <- factor(df$interaction_name_2, levels = unique(df$interaction_name_2))
 
+    # cell pairs from all datasets, so that the order does not depend on the last compared dataset
+    group.names0 <- group.names.all
     cells.order <- c()
     dataset.name.order <- c()
     for (i in 1:length(group.names0)) {
@@ -2348,6 +2361,27 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
   if (remove.isolate) {
     df <- df[!is.na(df$prob), ]
     line.on <- FALSE
+  }
+  if (!is.null(min.fc)) {
+    if (is.null(comparison) || length(comparison) < 2) {
+      message("`min.fc` is only used when comparing datasets with `comparison`")
+    } else {
+      # fold change between the highest and the second highest communication probability of each L-R pair and cell pair
+      prob.raw <- df$prob.original
+      prob.raw[is.na(prob.raw)] <- 0
+      key <- paste(df$interaction_name_2, df$group.names, sep = "__")
+      fc <- tapply(prob.raw, key, function(x) {
+        x <- sort(c(x, rep(0, max(0, length(comparison) - length(x)))), decreasing = TRUE)
+        x[1]/x[2]
+      })
+      keep <- fc[key] >= min.fc
+      df$prob[is.na(keep) | !keep] <- NA
+      df <- df[df$interaction_name_2 %in% unique(df$interaction_name_2[!is.na(df$prob)]), , drop = FALSE]
+      if (nrow(df) == 0) {
+        stop("No communications with a fold change larger than `min.fc` between datasets. Please consider decreasing `min.fc`. ")
+      }
+      df$interaction_name_2 <- droplevels(df$interaction_name_2)
+    }
   }
   if (!is.null(max.dataset)) {
     # line.on <- FALSE
@@ -2471,8 +2505,12 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
 
   if (!is.null(comparison)) {
     if (line.on) {
-      xintercept = seq(0.5+length(dataset.name[comparison]), length(group.names0)*length(dataset.name[comparison]), by = length(dataset.name[comparison]))
-      g <- g + geom_vline(xintercept = xintercept, linetype="dashed", color = "grey60", size = line.size)
+      # separate the cell pairs, whatever the number of datasets in which each cell pair is shown
+      pair.names <- sub(" \\([^()]*\\)$", "", levels(df$source.target))
+      xintercept <- which(pair.names[-1] != pair.names[-length(pair.names)]) + 0.5
+      if (length(xintercept) > 0) {
+        g <- g + geom_vline(xintercept = xintercept, linetype="dashed", color = "grey60", size = line.size)
+      }
     }
     if (color.text.use) {
       if (is.null(group)) {
@@ -2827,8 +2865,10 @@ netVisual_chord_cell_internal <- function(net, color.use = NULL, group = NULL, c
 #' @param show.legend whether show the figure legend
 #' @param legend.pos.x,legend.pos.y adjust the legend position
 #' @param thresh threshold of the p-value for determining significant interaction when visualizing links at the level of ligands/receptors;
+#' @param merge.genes whether to show each ligand and each receptor as a single sector. Default = TRUE: the grid track of each gene is then split and colored by the proportion of each source (for ligands) or target (for receptors) cell group, links are colored by the source cell groups, and ligands and receptors are separated by `big.gap`.
+#' Set merge.genes = FALSE to show one sector per gene and per cell group (the original behavior).
 #' @param ... other parameters to chordDiagram
-#' @importFrom circlize circos.clear chordDiagram circos.track circos.text get.cell.meta.data
+#' @importFrom circlize circos.clear chordDiagram circos.track circos.text get.cell.meta.data circos.rect
 #' @importFrom dplyr select %>% group_by summarize
 #' @importFrom grDevices recordPlot
 #' @importFrom stringr str_split
@@ -2842,10 +2882,10 @@ netVisual_chord_gene <- function(object, slot.name = "net", color.use = NULL,
                                  link.visible = TRUE, scale = FALSE, directional = 1, link.target.prop = TRUE, reduce = -1,
                                  transparency = 0.4, link.border = NA,
                                  title.name = NULL, legend.pos.x = 20, legend.pos.y = 20, show.legend = TRUE,
-                                 thresh = 0.05,
+                                 thresh = 0.05, merge.genes = TRUE,
                                  ...){
   if (!is.null(pairLR.use)) {
-    if (!is.data.frame(pairLR.use) | sum(c("interaction_name","pathway_name") %in% colnames(pairLR.use) == 0)) {
+    if (!is.data.frame(pairLR.use) | sum(c("interaction_name","pathway_name") %in% colnames(pairLR.use)) == 0) {
       stop("pairLR.use should be a data frame with a signle column named either 'interaction_name' or 'pathway_name' ")
     } else if ("pathway_name" %in% colnames(pairLR.use)) {
       message("slot.name is set to be 'netP' when pairLR.use contains signaling pathways")
@@ -2927,32 +2967,14 @@ netVisual_chord_gene <- function(object, slot.name = "net", color.use = NULL,
   }
 
   df$id <- 1:nrow(df)
+  df$ligand <- as.character(df$ligand)
+  df$receptor <- as.character(df$receptor)
 
   cell.order.sources <- levels(object@idents)[levels(object@idents) %in% sources.use]
   cell.order.targets <- levels(object@idents)[levels(object@idents) %in% targets.use]
 
   df$source <- factor(df$source, levels = cell.order.sources)
   df$target <- factor(df$target, levels = cell.order.targets)
-
-  df$ligand_std   <- toupper(gsub("_", "", df$ligand))
-  df$receptor_std <- toupper(gsub("_", "", df$receptor))
-
-  df.ordered.source <- df %>%
-      mutate(
-        ligand_std = toupper(gsub("_", "", ligand)),
-        receptor_std = toupper(gsub("_", "", receptor))
-      ) %>%
-  arrange(ligand_std, source, desc(prob))
-
-  df.ordered.target <- df.ordered.source %>%
-  arrange(receptor_std, target, desc(prob))
-  df.ordered.target <-  df.ordered.source %>% arrange(receptor, target, desc(prob))
-
-  order.source <- unique(df.ordered.source[ ,c('ligand','source')])
-  order.target <- unique(df.ordered.target[ ,c('receptor','target')])
-
-  # define sector order
-  order.sector <- c(order.source$ligand, order.target$receptor)
 
   # define cell type color
   if (is.null(color.use)){
@@ -2964,194 +2986,179 @@ netVisual_chord_gene <- function(object, slot.name = "net", color.use = NULL,
     color.use <- color.use[levels(object@idents) %in% as.character(union(df$source,df$target))]
   }
 
-  # define edge color
-  edge.color <- color.use[as.character(df.ordered.source$source)]
-  names(edge.color) <- as.character(df.ordered.source$source)
-
-  # define grid colors
-  grid.col.ligand <- color.use[as.character(order.source$source)]
-  names(grid.col.ligand) <- as.character(order.source$source)
-  grid.col.receptor <- color.use[as.character(order.target$target)]
-  names(grid.col.receptor) <- as.character(order.target$target)
-  grid.col <- c(as.character(grid.col.ligand), as.character(grid.col.receptor))
-  names(grid.col) <- order.sector
-
   if (directional == 2) {
     link.arr.type = "triangle"
   } else {
     link.arr.type = "big.arrow"
   }
 
-  df_source <- df.ordered.source %>%
-      mutate(ligand_std = toupper(gsub("_", "", ligand))) %>%
-      group_by(ligand, source, receptor, target) %>%
-      summarise(cluster_value = sum(prob), .groups = "drop") %>%
-      group_by(ligand) %>%
-      mutate(fraction = cluster_value / sum(cluster_value)) %>%
-      ungroup() %>%
-      arrange(toupper(gsub("_", "", ligand)), receptor, source, target)
-
-  df_target <- df.ordered.source %>%
-      mutate(receptor_std = toupper(gsub("_", "", receptor))) %>%
-      group_by(ligand, source, receptor, target) %>%
-      summarise(cluster_value = sum(prob), .groups = "drop") %>%
-      group_by(receptor) %>%
-      mutate(fraction = cluster_value / sum(cluster_value)) %>%
-      ungroup() %>%
-      arrange(toupper(gsub("_", "", receptor)), ligand, source, target)
-
-  df.plot <- df.ordered.source[ ,c('source', 'target', 'ligand','receptor','prob')] %>%
-    arrange(ligand, source, receptor, target)
-
-
-  #sector order
-    order.source <- unique(df.ordered.source[, c("ligand", "source")])
-    order.target <- unique(df.ordered.target[, c("receptor", "target")])
-    
-    # This defines order grouped by source/target clusters
-    ligand_order <- order.source$ligand
-    receptor_order <- order.target$receptor
-    
-    order.sector <- c(ligand_order, receptor_order)
-
-  circos.clear()
-
-  grid::grid.newpage()
-  vp_main <- grid::viewport(x = 0.5, y = 0.5, width = 1, height = 1, name = "main_vp")
-  grid::pushViewport(vp_main)
-    
-  # Helper to define layout positions
-  #vplayout <- function(x, y) grid::viewport(layout.pos.row = x, layout.pos.col = y)
-
-  if (!is.null(title.name)) {
-      grid::grid.text(
-        label = title.name,
-        x = unit(0.5, "npc"),
-        y = unit(0.01, "npc"),
-        gp = grid::gpar(fontsize = 14, fontface = "bold")
-      )
-    }
-    
-  n <- length(unique(names(grid.col)))
-
-  # Small gaps within group, large gap between
-  small.gap <- 1
-  big.gap <- 8  # visibly separate source/target
-
-  gap.after <- c(
-      rep(small.gap, length(ligand_order) - 1),
-      big.gap,  # gap between ligand and receptor
-      rep(small.gap, length(receptor_order) - 1),
-      big.gap   # closing the circle
-    )
-
-  circos.par(
-    start.degree = 0,      # or whatever layout you prefer
-    #gap.after = gap.after,  # wider gaps at group breaks if needed
-    track.margin = c(0.01, 0.01),
-    canvas.xlim = c(-1.2, 1.2),
-    canvas.ylim = c(-1.2, 1.2)        # expand canvas to give room
-  )
-  
-  chordDiagram(df.plot[ ,c('ligand','receptor','prob')],
-               order = order.sector,
-               col = edge.color,
-               #grid.col = grid.col,
-               transparency = 0.4,
-               link.border = link.border,
-               directional = directional,
-               direction.type = c("arrows"),
-               link.arr.type = link.arr.type,
-               annotationTrack = "grid",
-               preAllocateTracks = list(track.height = 0.05),
-               link.visible = TRUE,
-               scale = scale,
-               link.target.prop = TRUE,
-               reduce = -1)
-
-  circos.track(
-    ylim = c(0, 1),
-    track.index = 2,  # ← key change: force higher track level
-    bg.border = NA,
-    panel.fun = function(x, y) {
-      sector_name <- get.cell.meta.data("sector.index")
-      xlim <- get.cell.meta.data("xlim")
-
-      if ((xlim[2] - xlim[1]) < 1e-4) return(NULL)
-
-      if (sector_name %in% df_target$receptor) {
-        df_sector <- df_target[df_target$receptor == sector_name, ] %>% arrange(desc(row_number()))
-        x_start <- xlim[1]
-        x_end <- xlim[2]
-        width <- x_end - x_start
-
-        df_sector$fraction <- df_sector$fraction / sum(df_sector$fraction)
-
-        for (i in seq_len(nrow(df_sector))) {
-          xleft <- x_start
-          xright <- min(x_start + width * df_sector$fraction[i], x_end)
-          circos.rect(xleft, 0, xright, 1,
-                      col = custom_colors$discrete[as.character(df_sector$target[i])],
-                      border = NA)
-          x_start <- xright
-        }
+  if (!merge.genes) {
+    # one sector per ligand (resp. receptor) and per source (resp. target) cell group
+    # deal with duplicated sector names
+    ligand.uni <- unique(df$ligand)
+    for (i in 1:length(ligand.uni)) {
+      df.i <- df[df$ligand == ligand.uni[i], ]
+      source.uni <- unique(df.i$source)
+      for (j in 1:length(source.uni)) {
+        df.i.j <- df.i[df.i$source == source.uni[j], ]
+        df.i.j$ligand <- paste0(df.i.j$ligand, paste(rep(' ',j-1),collapse = ''))
+        df$ligand[df$id %in% df.i.j$id] <- df.i.j$ligand
       }
     }
-  )
-
-  circos.track(
-    ylim = c(0, 1),
-    track.index = 2,  # ← key change: force higher track level
-    bg.border = NA,
-    panel.fun = function(x, y) {
-      sector_name <- get.cell.meta.data("sector.index")
-      xlim <- get.cell.meta.data("xlim")
-
-      if ((xlim[2] - xlim[1]) < 1e-4) return(NULL)
-
-      if (sector_name %in% df_source$ligand) {
-        df_sector <- df_source[df_source$ligand == sector_name, ] %>% arrange(desc(receptor))
-        x_start <- xlim[1]
-        x_end <- xlim[2]
-        width <- x_end - x_start
-
-        df_sector$fraction <- df_sector$fraction / sum(df_sector$fraction)
-
-        for (i in seq_len(nrow(df_sector))) {
-          xleft <- x_start
-          xright <- min(x_start + width * df_sector$fraction[i], x_end)
-          circos.rect(xleft, 0, xright, 1,
-                      col = custom_colors$discrete[as.character(df_sector$source[i])],
-                      border = NA)
-          x_start <- xright
-        }
+    receptor.uni <- unique(df$receptor)
+    for (i in 1:length(receptor.uni)) {
+      df.i <- df[df$receptor == receptor.uni[i], ]
+      target.uni <- unique(df.i$target)
+      for (j in 1:length(target.uni)) {
+        df.i.j <- df.i[df.i$target == target.uni[j], ]
+        df.i.j$receptor <- paste0(df.i.j$receptor, paste(rep(' ',j-1),collapse = ''))
+        df$receptor[df$id %in% df.i.j$id] <- df.i.j$receptor
       }
     }
-  )
+
+    df.ordered.source <- df[with(df, order(source, -prob)), ]
+    df.ordered.target <- df[with(df, order(target, -prob)), ]
+
+    order.source <- unique(df.ordered.source[ ,c('ligand','source')])
+    order.target <- unique(df.ordered.target[ ,c('receptor','target')])
+
+    # define sector order
+    order.sector <- c(order.source$ligand, order.target$receptor)
+
+    # define edge color
+    edge.color <- color.use[as.character(df.ordered.source$source)]
+    names(edge.color) <- as.character(df.ordered.source$source)
+
+    # define grid colors
+    grid.col.ligand <- color.use[as.character(order.source$source)]
+    names(grid.col.ligand) <- as.character(order.source$source)
+    grid.col.receptor <- color.use[as.character(order.target$target)]
+    names(grid.col.receptor) <- as.character(order.target$target)
+    grid.col <- c(as.character(grid.col.ligand), as.character(grid.col.receptor))
+    names(grid.col) <- order.sector
+
+    df.plot <- df.ordered.source[ ,c('ligand','receptor','prob')]
+
+    circos.clear()
+    chordDiagram(df.plot,
+                 order = order.sector,
+                 col = edge.color,
+                 grid.col = grid.col,
+                 transparency = transparency,
+                 link.border = link.border,
+                 directional = directional,
+                 direction.type = c("diffHeight","arrows"),
+                 link.arr.type = link.arr.type,
+                 annotationTrack = "grid",
+                 annotationTrackHeight = annotationTrackHeight,
+                 preAllocateTracks = list(track.height = max(strwidth(order.sector))),
+                 small.gap = small.gap,
+                 big.gap = big.gap,
+                 link.visible = link.visible,
+                 scale = scale,
+                 link.target.prop = link.target.prop,
+                 reduce = reduce,
+                 ...)
+  } else {
+    # one sector per ligand and per receptor; the cell groups expressing each gene are shown in the grid track
+    # receptors sharing their name with a ligand (e.g., homophilic interactions) get a distinct sector name
+    ligand.uni <- unique(df$ligand)
+    receptor.uni <- unique(df$receptor)
+    receptor.sector <- receptor.uni
+    while (any(receptor.sector %in% ligand.uni)) {
+      idx.dup <- receptor.sector %in% ligand.uni
+      receptor.sector[idx.dup] <- paste0(receptor.sector[idx.dup], " ")
+    }
+    df$receptor <- receptor.sector[match(df$receptor, receptor.uni)]
+
+    # order the genes by the cell group contributing the most to their signaling, then alphabetically
+    gene.order <- function(gene, cell) {
+      flow <- tapply(df$prob, list(gene, cell), sum)
+      flow[is.na(flow)] <- 0
+      flow <- flow[, colSums(flow) > 0, drop = FALSE]
+      cell.main <- match(colnames(flow)[max.col(flow, ties.method = "first")], levels(cell))
+      gene.std <- toupper(gsub("_", "", rownames(flow)))
+      rownames(flow)[order(cell.main, gene.std)]
+    }
+    ligand.order <- gene.order(df$ligand, df$source)
+    receptor.order <- gene.order(df$receptor, df$target)
+    order.sector <- c(ligand.order, receptor.order)
+    group.sector <- factor(c(rep("ligand", length(ligand.order)), rep("receptor", length(receptor.order))), levels = c("ligand", "receptor"))
+    names(group.sector) <- order.sector
+
+    # order the links so that they are aligned with the cell groups shown in the grid track
+    df.plot <- df[with(df, order(match(ligand, ligand.order), source, match(receptor, receptor.order), target)), ]
+    edge.color <- color.use[as.character(df.plot$source)]
+
+    # contribution of each cell group to the signaling of each gene
+    composition.source <- stats::aggregate(prob ~ ligand + source, data = df.plot, FUN = sum)
+    composition.target <- stats::aggregate(prob ~ receptor + target, data = df.plot, FUN = sum)
+    colnames(composition.source) <- colnames(composition.target) <- c("gene", "cell", "prob")
+
+    grid.col <- rep("grey80", length(order.sector))
+    names(grid.col) <- order.sector
+
+    circos.clear()
+    chordDiagram(df.plot[ ,c('ligand','receptor','prob')],
+                 group = group.sector,
+                 col = edge.color,
+                 grid.col = grid.col,
+                 transparency = transparency,
+                 link.border = link.border,
+                 directional = directional,
+                 direction.type = c("diffHeight","arrows"),
+                 link.arr.type = link.arr.type,
+                 annotationTrack = "grid",
+                 annotationTrackHeight = annotationTrackHeight,
+                 preAllocateTracks = list(track.height = max(strwidth(order.sector))),
+                 small.gap = small.gap,
+                 big.gap = big.gap,
+                 link.visible = link.visible,
+                 scale = scale,
+                 link.target.prop = link.target.prop,
+                 reduce = reduce,
+                 ...)
+
+    # color the grid track of each gene by the proportion of each cell group
+    circos.track(track.index = 2, panel.fun = function(x, y) {
+      sector.name <- get.cell.meta.data("sector.index")
+      xlim <- get.cell.meta.data("xlim")
+      ylim <- get.cell.meta.data("ylim")
+      if (sector.name %in% ligand.order) {
+        composition <- composition.source[composition.source$gene == sector.name, , drop = FALSE]
+      } else {
+        composition <- composition.target[composition.target$gene == sector.name, , drop = FALSE]
+      }
+      composition <- composition[order(composition$cell), , drop = FALSE]
+      if (nrow(composition) == 0 || sum(composition$prob) == 0) {
+        return(invisible(NULL))
+      }
+      breaks <- xlim[1] + (xlim[2] - xlim[1]) * c(0, cumsum(composition$prob)/sum(composition$prob))
+      circos.rect(breaks[-length(breaks)], ylim[1], breaks[-1], ylim[2],
+                  col = color.use[as.character(composition$cell)], border = NA)
+    }, bg.border = NA)
+  }
 
   circos.track(track.index = 1, panel.fun = function(x, y) {
-      xlim = get.cell.meta.data("xlim")
-      xplot = get.cell.meta.data("xplot")
-      ylim = get.cell.meta.data("ylim")
-      sector.name = get.cell.meta.data("sector.index")
-      circos.text(mean(xlim), ylim[1], sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5),cex = lab.cex)
-    }, bg.border = NA)
+    xlim = get.cell.meta.data("xlim")
+    xplot = get.cell.meta.data("xplot")
+    ylim = get.cell.meta.data("ylim")
+    sector.name = get.cell.meta.data("sector.index")
+    circos.text(mean(xlim), ylim[1], sector.name, facing = "clockwise", niceFacing = TRUE, adj = c(0, 0.5),cex = lab.cex)
+  }, bg.border = NA)
 
+  # https://jokergoo.github.io/circlize_book/book/legends.html
   if (show.legend) {
-      lgd <- ComplexHeatmap::Legend(
-        at = names(color.use),
-        type = "grid",
-        legend_gp = grid::gpar(fill = color.use),
-        title = "Cell State"
-      )
-      ComplexHeatmap::draw(
-        lgd,
-        x = unit(1, "npc") - unit(5, "mm"),  # right side
-        y = unit(0.5, "npc"),                # centered vertically
-        just = c("right", "center")
-      )
-    }
+    lgd <- ComplexHeatmap::Legend(at = names(color.use), type = "grid", legend_gp = grid::gpar(fill = color.use), title = "Cell State")
+    ComplexHeatmap::draw(lgd, x = unit(1, "npc")-unit(legend.pos.x, "mm"), y = unit(legend.pos.y, "mm"), just = c("right", "bottom"))
+  }
+
   circos.clear()
+  if(!is.null(title.name)){
+    text(-0, 1.02, title.name, cex=1)
+  }
+  gg <- recordPlot()
+  return(gg)
 }
 
 

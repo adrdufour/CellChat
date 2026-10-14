@@ -37,7 +37,7 @@
 #'
 #' @param contact.dependent.forced Whether forcing to use the `contact-dependent` manner for inference signaling for all L-R pairs including secreted signaling. Users can set `contact.dependent.forced = TRUE` if also preferring interactions within a contact manner for `Secreted Signaling`.
 #'
-#' @param nboot Threshold of p-values
+#' @param nboot the number of permutations used to compute the p-values. The p-values are computed as (1 + number of permutations with a probability at least as large as the observed one)/(1 + nboot), so the smallest possible p-value is 1/(nboot + 1); increase nboot (e.g., nboot = 1000) for a finer resolution of the p-values, in particular when correcting for multiple testing
 #' @param seed.use Set a random seed. By default, set the seed to 1.
 #' @param Kh Parameter in Hill function
 #' @param n Parameter in Hill function
@@ -300,8 +300,10 @@ computeCommunProb <- function(object, type = c("triMean", "truncatedMean","thres
         }
       )
       Pboot <- matrix(unlist(Pboot), nrow=length(Pnull), ncol = nboot, byrow = FALSE)
-      nReject <- rowSums(Pboot - Pnull > 0)
-      p = nReject/nboot
+      # permutation p-value (Phipson & Smyth, 2010): the observed value is counted as one of the permutations,
+      # so that the p-value is never 0, and ties are counted as at least as extreme as the observed value
+      nReject <- rowSums(Pboot - Pnull >= 0)
+      p = (nReject + 1)/(nboot + 1)
       Pval[, , i] <- matrix(p, nrow = numCluster, ncol = numCluster, byrow = FALSE)
     }
     setTxtProgressBar(pb = pb, value = i)
