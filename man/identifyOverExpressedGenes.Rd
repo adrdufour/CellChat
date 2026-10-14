@@ -23,6 +23,10 @@ identifyOverExpressedGenes(
   thresh.p = 0.05,
   thresh.p.adj = NULL,
   p.adjust.method = "BH",
+  group.replicate = NULL,
+  replicate.method = c("limma", "t.test"),
+  paired.replicate = FALSE,
+  min.cells.replicate = 10,
   do.DE = TRUE,
   do.fast = TRUE,
   min.cells = 10
@@ -68,6 +72,18 @@ Using thresh.p.adj is recommended: with thousands of genes tested in each cell g
 
 \item{p.adjust.method}{the method used to adjust the p-values for multiple testing within each cell group (see `stats::p.adjust`); Default = "BH" (false discovery rate).
 NB: when comparing conditions, cells are considered as independent observations (no biological replicates), which makes the p-values over-optimistic; effect size thresholds (`thresh.fc`, `thresh.pc`) are therefore important.}
+
+\item{group.replicate}{the column name of `object@meta` giving the biological replicates (samples), e.g., the sample column of the Seurat metadata such as "orig.ident".
+When set together with `group.dataset`, the differential expression between conditions is performed at the level of the replicates (pseudobulk) instead of the cells:
+for each cell group, the expression of each replicate is the log of the average normalized expression of its cells (see `min.cells.replicate`), and the replicates are compared between conditions.
+This takes into account the biological variability between replicates and avoids the over-optimistic p-values of the cell-level tests. At least two replicates per condition are required for each cell group.
+logFC is the difference of the mean pseudobulk expression between conditions (natural log), and pct.1/pct.2 are the fractions of expressing cells in `pos.dataset` and in the other condition(s).}
+
+\item{replicate.method}{the test used with `group.replicate`: "limma" (moderated t-test from the limma package; recommended for few replicates) or "t.test" (Welch t-test, or paired t-test when `paired.replicate = TRUE`)}
+
+\item{paired.replicate}{whether the replicate labels identify the same individuals/donors in the different conditions (paired design, e.g. before/after treatment). Default = FALSE: replicates are considered as different samples in each condition, even if they share the same label (e.g., "rep1" in each condition).}
+
+\item{min.cells.replicate}{the minimum number of cells of a replicate in a cell group for this replicate to be used in the pseudobulk analysis of this cell group. Default = 10}
 
 \item{do.DE}{Whether to perform differential expression analysis. By default do.DE = TRUE; When do.DE = FALSE, selecting over-expressed genes that are expressed in more than `min.cells` cells.}
 

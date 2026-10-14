@@ -366,6 +366,14 @@ subsetData <- function(object, features = NULL) {
 #' Using thresh.p.adj is recommended: with thousands of genes tested in each cell group, filtering on raw p-values only keeps many false positives.
 #' @param p.adjust.method the method used to adjust the p-values for multiple testing within each cell group (see `stats::p.adjust`); Default = "BH" (false discovery rate).
 #' NB: when comparing conditions, cells are considered as independent observations (no biological replicates), which makes the p-values over-optimistic; effect size thresholds (`thresh.fc`, `thresh.pc`) are therefore important.
+#' @param group.replicate the column name of `object@meta` giving the biological replicates (samples), e.g., the sample column of the Seurat metadata such as "orig.ident".
+#' When set together with `group.dataset`, the differential expression between conditions is performed at the level of the replicates (pseudobulk) instead of the cells:
+#' for each cell group, the expression of each replicate is the log of the average normalized expression of its cells (see `min.cells.replicate`), and the replicates are compared between conditions.
+#' This takes into account the biological variability between replicates and avoids the over-optimistic p-values of the cell-level tests. At least two replicates per condition are required for each cell group.
+#' logFC is the difference of the mean pseudobulk expression between conditions (natural log), and pct.1/pct.2 are the fractions of expressing cells in `pos.dataset` and in the other condition(s).
+#' @param replicate.method the test used with `group.replicate`: "limma" (moderated t-test from the limma package; recommended for few replicates) or "t.test" (Welch t-test, or paired t-test when `paired.replicate = TRUE`)
+#' @param paired.replicate whether the replicate labels identify the same individuals/donors in the different conditions (paired design, e.g. before/after treatment). Default = FALSE: replicates are considered as different samples in each condition, even if they share the same label (e.g., "rep1" in each condition).
+#' @param min.cells.replicate the minimum number of cells of a replicate in a cell group for this replicate to be used in the pseudobulk analysis of this cell group. Default = 10
 #' @param do.DE Whether to perform differential expression analysis. By default do.DE = TRUE; When do.DE = FALSE, selecting over-expressed genes that are expressed in more than `min.cells` cells.
 #' @param do.fast If do.fast = TRUE, then perform a ultra-fast Wilcoxon test using presto package; otherwise using stats package. These two methods produce different logFC values, and the presto::wilcoxauc method gives smaller values.
 #' @param min.cells the minmum number of expressed cells required for the genes that are considered for cell-cell communication analysis
@@ -383,6 +391,7 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
                                        group.dataset = NULL, pos.dataset = NULL, neg.dataset = NULL, group.DE.combined = FALSE,
                                        features.name = "features",  only.pos = TRUE, features = NULL, return.object = TRUE,
                                        thresh.pc = 0, thresh.fc = 0, thresh.p = 0.05, thresh.p.adj = NULL, p.adjust.method = "BH",
+                                       group.replicate = NULL, replicate.method = c("limma", "t.test"), paired.replicate = FALSE, min.cells.replicate = 10,
                                        do.DE = TRUE, do.fast = TRUE, min.cells = 10) {
   p.adjust.method <- match.arg(p.adjust.method, stats::p.adjust.methods)
   if (!is.list(object@var.features)) {
@@ -430,6 +439,12 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
 
     if (!is.null(group.dataset)) {
       labels.dataset <- as.character(object@meta[[group.dataset]])
+      if (!is.null(group.replicate)) {
+        if (!(group.replicate %in% colnames(object@meta))) {
+          stop("`group.replicate` should be one of the column names of `object@meta`, e.g., the sample column of the Seurat metadata ('orig.ident', 'sample', ...)")
+        }
+        labels.replicate <- as.character(object@meta[[group.replicate]])
+      }
       if (!(pos.dataset %in% unique(labels.dataset))) {
         cat("Please set pos.dataset to be one of the following dataset names: ", unique(as.character(labels.dataset)))
         stop()
@@ -443,6 +458,9 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
         data.use <- data.use[, cells.keep, drop = FALSE]
         labels <- droplevels(labels[cells.keep])
         labels.dataset <- labels.dataset[cells.keep]
+        if (!is.null(group.replicate)) {
+          labels.replicate <- labels.replicate[cells.keep]
+        }
         level.use <- level.use[level.use %in% unique(labels)]
         numCluster <- length(level.use)
       }
@@ -453,7 +471,41 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
       }
     }
 
-    if (do.fast) {
+    if (!is.null(group.replicate)) {
+      if (is.null(group.dataset)) {
+        stop("`group.replicate` is used to compare conditions: please also set `group.dataset` and `pos.dataset`")
+      }
+      replicate.method <- match.arg(replicate.method)
+      clusters.use <- labels
+      level.use.pb <- level.use
+      if (group.DE.combined) {
+        # ignore the cell group information
+        clusters.use <- factor(rep("all", length(labels)))
+        level.use.pb <- "all"
+      }
+      markers.all <- pseudobulkDE(data.use, clusters = clusters.use, level.use = level.use.pb,
+                                  conditions = labels.dataset, pos.dataset = pos.dataset, replicates = labels.replicate,
+                                  method = replicate.method, paired = paired.replicate, min.cells = min.cells.replicate,
+                                  thresh.pc = thresh.pc, p.adjust.method = p.adjust.method, n.features = length(features.use))
+      if (group.DE.combined && nrow(markers.all) > 0) {
+        markers.all <- do.call(rbind, lapply(level.use, function(x) {markers.all$clusters <- x; markers.all}))
+      }
+      if (nrow(markers.all) > 0) {
+        markers.all <- markers.all[markers.all$pvalues < thresh.p & abs(markers.all$logFC) >= thresh.fc, , drop = FALSE]
+        if (!is.null(thresh.p.adj)) {
+          markers.all <- markers.all[markers.all$pvalues.adj < thresh.p.adj, , drop = FALSE]
+        }
+        if (only.pos) {
+          markers.all <- markers.all[markers.all$logFC > 0, , drop = FALSE]
+        }
+      }
+      markers.all$datasets <- factor(ifelse(markers.all$logFC > 0, pos.dataset, levels(labels.dataset)[2]), levels = levels(labels.dataset))
+      markers.all <- markers.all[order(markers.all$datasets, markers.all$pvalues, -markers.all$logFC), , drop = FALSE]
+      rownames(markers.all) <- NULL
+      object@var.features[[features.name]] <- unique(markers.all$features)
+      object@var.features[[paste0(features.name, ".info")]] <- markers.all
+
+    } else if (do.fast) {
       presto.check <- rlang::is_installed(c("presto"))
       if (!presto.check) {
         stop(
@@ -669,6 +721,120 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
   } else {
     return(markers.all)
   }
+}
+
+
+#' Pseudobulk differential expression between conditions using biological replicates
+#'
+#' Internal function used by `identifyOverExpressedGenes` when `group.replicate` is set.
+#'
+#' @param data.use log-normalized expression matrix (genes x cells)
+#' @param clusters cell group of each cell
+#' @param level.use the cell groups to analyze
+#' @param conditions a factor giving the condition of each cell; the first level is `pos.dataset` and the second level the other condition(s)
+#' @param pos.dataset the condition of interest
+#' @param replicates the replicate (sample) of each cell
+#' @param method "limma" or "t.test"
+#' @param paired whether the replicate labels identify the same donors in the different conditions
+#' @param min.cells the minimum number of cells of a replicate in a cell group
+#' @param thresh.pc genes expressed in less than this fraction of cells in both conditions are not tested
+#' @param p.adjust.method the method used to adjust the p-values within each cell group
+#' @param n.features the number of features used for the adjustment (genes not tested are counted as tests)
+#' @return a data frame with the columns clusters, features, pvalues, logFC, pct.1, pct.2, pvalues.adj, n.replicates.1, n.replicates.2
+#' @keywords internal
+pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset, replicates, method = c("limma", "t.test"),
+                         paired = FALSE, min.cells = 10, thresh.pc = 0, p.adjust.method = "BH", n.features = nrow(data.use)) {
+  method <- match.arg(method)
+  if (method == "limma" && !requireNamespace("limma", quietly = TRUE)) {
+    message("The limma package is not installed: the Welch t-test is used instead. Install limma with `BiocManager::install('limma')`.")
+    method <- "t.test"
+  }
+  is.pos <- as.character(conditions) == pos.dataset
+  # a sample is a replicate in a given condition (replicates may share labels between conditions)
+  samples <- paste(ifelse(is.pos, "pos", "neg"), replicates, sep = "__")
+  if (!paired) {
+    reps.pos <- unique(replicates[is.pos]); reps.neg <- unique(replicates[!is.pos])
+    if (length(intersect(reps.pos, reps.neg)) > 0) {
+      message("Some replicate labels are found in both conditions (", toString(utils::head(intersect(reps.pos, reps.neg), 3)),
+              "); they are treated as different samples. Set `paired.replicate = TRUE` if they are the same donors.")
+    }
+  }
+  res <- list()
+  for (cl in level.use) {
+    idx <- which(clusters == cl)
+    if (length(idx) == 0) next
+    n.cells <- table(samples[idx])
+    samples.use <- names(n.cells)[n.cells >= min.cells]
+    sample.pos <- grepl("^pos__", samples.use)
+    if (sum(sample.pos) < 2 || sum(!sample.pos) < 2) {
+      message("Cell group ", cl, ": less than two replicates with at least ", min.cells, " cells in each condition; this cell group is skipped.")
+      next
+    }
+    idx <- idx[samples[idx] %in% samples.use]
+    # pseudobulk expression: log of the average normalized expression of the cells of each replicate
+    pb <- sapply(samples.use, function(x) {
+      log1p(Matrix::rowMeans(expm1(data.use[, idx[samples[idx] == x], drop = FALSE])))
+    })
+    pb <- matrix(pb, nrow = nrow(data.use), dimnames = list(rownames(data.use), samples.use))
+    donors <- sub("^(pos|neg)__", "", samples.use)
+    if (paired) {
+      donors.both <- intersect(donors[sample.pos], donors[!sample.pos])
+      if (length(donors.both) < 2) {
+        message("Cell group ", cl, ": less than two donors found in both conditions for a paired analysis; this cell group is skipped.")
+        next
+      }
+      keep <- donors %in% donors.both
+      pb <- pb[, keep, drop = FALSE]; sample.pos <- sample.pos[keep]; donors <- donors[keep]; samples.use <- samples.use[keep]
+      idx <- idx[samples[idx] %in% samples.use]
+    }
+    # fraction of expressing cells in each condition
+    pct.1 <- Matrix::rowMeans(data.use[, idx[is.pos[idx]], drop = FALSE] > 0)
+    pct.2 <- Matrix::rowMeans(data.use[, idx[!is.pos[idx]], drop = FALSE] > 0)
+    features <- rownames(pb)[pmax(pct.1, pct.2) > thresh.pc & apply(pb, 1, stats::var) > 0]
+    if (length(features) == 0) next
+    pb <- pb[features, , drop = FALSE]
+    if (paired) {
+      pos.mat <- pb[, sample.pos, drop = FALSE][, order(donors[sample.pos]), drop = FALSE]
+      neg.mat <- pb[, !sample.pos, drop = FALSE][, order(donors[!sample.pos]), drop = FALSE]
+      logFC <- rowMeans(pos.mat - neg.mat)
+    } else {
+      logFC <- rowMeans(pb[, sample.pos, drop = FALSE]) - rowMeans(pb[, !sample.pos, drop = FALSE])
+    }
+    if (method == "limma") {
+      condition <- factor(ifelse(sample.pos, "pos", "neg"), levels = c("neg", "pos"))
+      if (paired) {
+        donor <- factor(donors)
+        design <- stats::model.matrix(~ donor + condition)
+      } else {
+        design <- stats::model.matrix(~ condition)
+      }
+      fit <- limma::eBayes(limma::lmFit(pb, design), trend = TRUE)
+      pvalues <- fit$p.value[, "conditionpos"]
+    } else {
+      pvalues <- sapply(features, function(g) {
+        if (paired) {
+          d <- pos.mat[g, ] - neg.mat[g, ]
+          if (stats::sd(d) == 0) return(ifelse(mean(d) == 0, 1, 0))
+          stats::t.test(pos.mat[g, ], neg.mat[g, ], paired = TRUE)$p.value
+        } else {
+          x <- pb[g, sample.pos]; y <- pb[g, !sample.pos]
+          if (stats::sd(x) == 0 && stats::sd(y) == 0) return(ifelse(mean(x) == mean(y), 1, 0))
+          stats::t.test(x, y)$p.value
+        }
+      })
+    }
+    pvalues[is.na(pvalues)] <- 1
+    res[[cl]] <- data.frame(clusters = cl, features = features, pvalues = as.numeric(pvalues), logFC = as.numeric(logFC),
+                            pct.1 = as.numeric(pct.1[features]), pct.2 = as.numeric(pct.2[features]),
+                            pvalues.adj = stats::p.adjust(as.numeric(pvalues), method = p.adjust.method, n = max(n.features, length(features))),
+                            n.replicates.1 = sum(sample.pos), n.replicates.2 = sum(!sample.pos), stringsAsFactors = FALSE)
+  }
+  if (length(res) == 0) {
+    warning("No cell group has enough replicates in each condition for the pseudobulk analysis!")
+    return(data.frame(clusters = character(0), features = character(0), pvalues = numeric(0), logFC = numeric(0),
+                      pct.1 = numeric(0), pct.2 = numeric(0), pvalues.adj = numeric(0), n.replicates.1 = integer(0), n.replicates.2 = integer(0)))
+  }
+  do.call(rbind, res)
 }
 
 
