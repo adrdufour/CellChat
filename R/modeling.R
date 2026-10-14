@@ -258,7 +258,7 @@ computeCommunProb <- function(object, type = c("triMean", "truncatedMean","thres
       Pnull <- as.vector(Pnull)
 
       #Pboot <- foreach(nE = 1:nboot) %dopar% {
-      Pboot <- sapply(
+      Pboot <- my.sapply(
         X = 1:nboot,
         FUN = function(nE) {
           data.use.avgB <- data.use.avg.boot[[nE]]
@@ -419,11 +419,11 @@ aggregateNet <- function(object, sources.use = NULL, targets.use = NULL, signali
                                   signaling = signaling,
                                   pairLR.use = pairLR.use,
                                   thresh = thresh)
-    df.net$source_target <- paste(df.net$source, df.net$target, sep = "_")
+    df.net$source_target <- paste(df.net$source, df.net$target, sep = "|")
     df.net2 <- df.net %>% group_by(source_target) %>% summarize(count = n(), .groups = 'drop')
     df.net3 <- df.net %>% group_by(source_target) %>% summarize(prob = sum(prob), .groups = 'drop')
     df.net2$prob <- df.net3$prob
-    a <- stringr::str_split(df.net2$source_target, "_", simplify = T)
+    a <- stringr::str_split(df.net2$source_target, stringr::fixed("|"), simplify = T)
     df.net2$source <- as.character(a[, 1])
     df.net2$target <- as.character(a[, 2])
     cells.level <- levels(object@idents)
@@ -875,10 +875,10 @@ geometricMean <- function(x,na.rm=TRUE){
 #' @param x a numeric vector
 #' @param na.rm whether remove na
 #' @return
-#' @importFrom stats quantile
+#' @importFrom collapse fquantile
 #' @export
 triMean <- function(x, na.rm = TRUE) {
-  mean(stats::quantile(x, probs = c(0.25, 0.50, 0.50, 0.75), na.rm = na.rm))
+  mean(collapse::fquantile(x, probs = c(0.25, 0.50, 0.50, 0.75), na.rm = na.rm))
 }
 
 #' Compute the average expression per cell group when the percent of expressing cells per cell group larger than a threshold
@@ -1284,7 +1284,7 @@ computeCellDistance <- function(coordinates, interaction.range = NULL, ratio = N
     stop("Please check the input 'coordinates' and make sure it is a two column matrix.")
   }
 
-  d.spatial <- stats::dist(coordinates)
+  d.spatial <- collapse::fdist(coordinates)
   if (!is.null(ratio)) {
     d.spatial <- d.spatial*ratio
   }
