@@ -755,8 +755,27 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     method <- "t.test"
   }
   is.pos <- as.character(conditions) == pos.dataset
+  # the pseudobulk expression is computed from log-normalized data
+  if (any(is.na(data.use))) {
+    warning("The expression data contain NA values; they are set to 0 for the pseudobulk analysis.", call. = FALSE)
+    data.use[is.na(data.use)] <- 0
+  }
+  if (any(data.use < 0)) {
+    stop("The expression data contain negative values: `group.replicate` requires log-normalized data (e.g., the 'data' layer of Seurat, not the scaled data).")
+  }
+  if (max(data.use) > 50) {
+    warning("The maximum expression value is ", round(max(data.use)), ": the data do not seem to be log-normalized, which is required by the pseudobulk analysis.", call. = FALSE)
+  }
   # a sample is a replicate in a given condition (replicates may share labels between conditions)
   samples <- paste(ifelse(is.pos, "pos", "neg"), replicates, sep = "__")
+  reps.per.condition <- tapply(as.character(replicates), ifelse(is.pos, pos.dataset, "the other condition(s)"), function(x) sort(unique(x)))
+  if (any(lengths(reps.per.condition) < 2)) {
+    stop("At least two biological replicates are required in each condition, but `group.replicate` gives: ",
+         paste0(names(reps.per.condition), ": ", sapply(reps.per.condition, toString), collapse = "; "), ". ",
+         "NB: when the CellChat object is created without sample information, the column `samples` contains 'sample1' for all cells. ",
+         "Please use the metadata column giving the samples (e.g., group.replicate = 'orig.ident'), check it with `table(object@meta[[group.dataset]], object@meta[[group.replicate]])`, ",
+         "or remove `group.replicate` to perform the cell-level test.", call. = FALSE)
+  }
   if (!paired) {
     reps.pos <- unique(replicates[is.pos]); reps.neg <- unique(replicates[!is.pos])
     if (length(intersect(reps.pos, reps.neg)) > 0) {
@@ -765,6 +784,7 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     }
   }
   res <- list()
+  skipped <- c()
   for (cl in level.use) {
     idx <- which(clusters == cl)
     if (length(idx) == 0) next
@@ -772,7 +792,7 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     samples.use <- names(n.cells)[n.cells >= min.cells]
     sample.pos <- grepl("^pos__", samples.use)
     if (sum(sample.pos) < 2 || sum(!sample.pos) < 2) {
-      message("Cell group ", cl, ": less than two replicates with at least ", min.cells, " cells in each condition; this cell group is skipped.")
+      skipped <- c(skipped, paste0(cl, " (", sum(sample.pos), " vs. ", sum(!sample.pos), ")"))
       next
     }
     idx <- idx[samples[idx] %in% samples.use]
@@ -785,7 +805,7 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     if (paired) {
       donors.both <- intersect(donors[sample.pos], donors[!sample.pos])
       if (length(donors.both) < 2) {
-        message("Cell group ", cl, ": less than two donors found in both conditions for a paired analysis; this cell group is skipped.")
+        skipped <- c(skipped, paste0(cl, " (", length(donors.both), " paired donor(s))"))
         next
       }
       keep <- donors %in% donors.both
@@ -795,7 +815,7 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     # fraction of expressing cells in each condition
     pct.1 <- Matrix::rowMeans(data.use[, idx[is.pos[idx]], drop = FALSE] > 0)
     pct.2 <- Matrix::rowMeans(data.use[, idx[!is.pos[idx]], drop = FALSE] > 0)
-    features <- rownames(pb)[pmax(pct.1, pct.2) > thresh.pc & apply(pb, 1, stats::var) > 0]
+    features <- rownames(pb)[which(pmax(pct.1, pct.2) > thresh.pc & apply(pb, 1, stats::var) > 0 & rowSums(!is.finite(pb)) == 0)]
     if (length(features) == 0) next
     pb <- pb[features, , drop = FALSE]
     if (paired) {
@@ -834,10 +854,13 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
                             pvalues.adj = stats::p.adjust(as.numeric(pvalues), method = p.adjust.method, n = max(n.features, length(features))),
                             n.replicates.1 = sum(sample.pos), n.replicates.2 = sum(!sample.pos), stringsAsFactors = FALSE)
   }
+  if (length(skipped) > 0) {
+    message(length(skipped), " of ", length(level.use), " cell group(s) skipped (less than two replicates with at least ", min.cells,
+            " cells in each condition; number of usable replicates in brackets): ", toString(skipped))
+  }
   if (length(res) == 0) {
-    warning("No cell group has enough replicates in each condition for the pseudobulk analysis!")
-    return(data.frame(clusters = character(0), features = character(0), pvalues = numeric(0), logFC = numeric(0),
-                      pct.1 = numeric(0), pct.2 = numeric(0), pvalues.adj = numeric(0), n.replicates.1 = integer(0), n.replicates.2 = integer(0)))
+    stop("No cell group has at least two replicates with at least `min.cells.replicate` = ", min.cells, " cells in each condition: ",
+         toString(skipped), ". Please decrease `min.cells.replicate` or check the replicates with `table(object@meta[[group.replicate]], object@idents$joint)`.", call. = FALSE)
   }
   do.call(rbind, res)
 }
