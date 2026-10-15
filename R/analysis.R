@@ -2999,7 +2999,16 @@ netMappingDEG <- function(object, features.name, variable.all = TRUE, thresh = 0
   net$source.ligand <- paste0(net$source,".", net$ligand)
   net$target.receptor <- paste0(net$target,".", net$receptor)
 
-  DEG$clusters.features <- paste0(DEG$clusters,".", DEG$features)
+  if (is.null(DEG) || nrow(DEG) == 0) {
+    warning("No differentially expressed genes are stored in `object@var.features[['", features.name, "']]`: the DEG columns of the result are NA. ",
+            "Please relax the thresholds used in `identifyOverExpressedGenes` (e.g., `thresh.fc`, `thresh.p.adj`, `thresh.pc`, or `min.cells.replicate` with `group.replicate`).", call. = FALSE)
+    DEG <- data.frame(clusters = character(0), features = character(0), pvalues = numeric(0), logFC = numeric(0),
+                      pct.1 = numeric(0), pct.2 = numeric(0), pvalues.adj = numeric(0), stringsAsFactors = FALSE)
+  }
+  if (!all(c("clusters", "features", "pvalues", "logFC", "pct.1", "pct.2") %in% colnames(DEG))) {
+    stop("`object@var.features[['", features.name, "']]` does not contain the differential expression results. Please run `identifyOverExpressedGenes` with `do.DE = TRUE`.")
+  }
+  DEG$clusters.features <- paste0(DEG$clusters, rep(".", nrow(DEG)), DEG$features)
   # one row per cell group and gene (the first one, i.e., the most significant one, is used)
   DEG <- DEG[!duplicated(DEG$clusters.features), , drop = FALSE]
   if (!("pvalues.adj" %in% colnames(DEG))) {

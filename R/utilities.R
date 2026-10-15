@@ -716,6 +716,11 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
   }
 
 
+  if (do.DE && nrow(markers.all) == 0) {
+    warning("No genes pass the thresholds of the differential expression analysis (thresh.p = ", thresh.p,
+            ifelse(is.null(thresh.p.adj), "", paste0(", thresh.p.adj = ", thresh.p.adj)), ", thresh.fc = ", thresh.fc, ", thresh.pc = ", thresh.pc,
+            ifelse(is.null(group.replicate), "", paste0(", min.cells.replicate = ", min.cells.replicate)), "). Please consider relaxing them.", call. = FALSE)
+  }
   if (return.object) {
     return(object)
   } else {
