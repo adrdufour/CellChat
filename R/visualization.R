@@ -111,6 +111,37 @@ datasetPalette <- function(n) {
   }
 }
 
+#' Unique names for the heatmaps returned by CellChat
+#'
+#' ComplexHeatmap merges the legends and annotations that share the same name when heatmaps are concatenated with `+`,
+#' so each heatmap gets a unique name.
+#' @param prefix a prefix
+#' @keywords internal
+uniqueHeatmapName <- function(prefix = "heatmap") {
+  n <- getOption("CellChat.heatmap.counter", 0) + 1
+  options(CellChat.heatmap.counter = n)
+  paste0(prefix, " #", n)
+}
+
+#' Convert a ComplexHeatmap object into a patchwork element
+#'
+#' The returned object can be combined with other heatmaps or ggplot2 plots using `+` or `|` from patchwork
+#' (each heatmap keeps its own clustering and legend), and saved with `ggplot2::ggsave`.
+#' @param ht a Heatmap or HeatmapList object
+#' @param ... other parameters passed to `ComplexHeatmap::draw`
+#' @return a patchwork-compatible ggplot object
+#' @export
+#' @examples
+#' \dontrun{
+#' gg1 <- heatmapToGgplot(netVisual_heatmap(cellchat))
+#' gg2 <- heatmapToGgplot(netVisual_heatmap(cellchat, measure = "weight"))
+#' gg1 + gg2
+#' }
+heatmapToGgplot <- function(ht, ...) {
+  grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht, ...), wrap.grobs = TRUE)
+  patchwork::wrap_elements(full = grob)
+}
+
 #' Generate ggplot2 colors
 #'
 #' @param n number of colors to generate
@@ -1906,6 +1937,8 @@ netVisual_diffInteraction <- function(object, comparison = c(1,2), measure = c("
 #' @param title.name the name of the title
 #' @param width width of heatmap
 #' @param height height of heatmap
+#' @param ylim.top set the range of the top barplot (e.g., ylim.top = c(0, 4))
+#' @param ylim.right set the range of the right barplot (e.g., ylim.right = c(0, 5))
 #' @param font.size fontsize in heatmap
 #' @param font.size.title font size of the title
 #' @param cluster.rows whether cluster rows
@@ -1914,6 +1947,9 @@ netVisual_diffInteraction <- function(object, comparison = c(1,2), measure = c("
 #' @param targets.use a vector giving the index or the name of target cell groups.
 #' @param remove.isolate whether remove the isolate nodes in the communication network
 #' @param row.show,col.show a vector giving the index or the name of row or columns to show in the heatmap
+#' @param as.ggplot whether to return a patchwork-compatible object (see `heatmapToGgplot`) instead of a ComplexHeatmap object.
+#' With as.ggplot = TRUE, `gg1 + gg2` shows two independent heatmaps side by side (each one with its own clustering and legend) and the result can be saved with `ggplot2::ggsave`;
+#' with the default ComplexHeatmap object, `ht1 + ht2` concatenates the heatmaps, the rows of the second one following the first one.
 #' @importFrom methods slot
 #' @importFrom grDevices colorRampPalette
 #' @importFrom RColorBrewer brewer.pal
@@ -1921,8 +1957,9 @@ netVisual_diffInteraction <- function(object, comparison = c(1,2), measure = c("
 #' @return  an object of ComplexHeatmap
 #' @export
 netVisual_heatmap <- function(object, comparison = c(1,2), measure = c("count", "weight"), signaling = NULL, slot.name = c("netP", "net"), color.use = NULL, color.heatmap = NULL,
-                              title.name = NULL, width = NULL, height = NULL, font.size = 8, font.size.title = 10, cluster.rows = FALSE, cluster.cols = FALSE,
-                              sources.use = NULL, targets.use = NULL, remove.isolate = FALSE, row.show = NULL, col.show = NULL){
+                              title.name = NULL, width = NULL, height = NULL, ylim.top = NULL, ylim.right = NULL,
+                              font.size = 8, font.size.title = 10, cluster.rows = FALSE, cluster.cols = FALSE,
+                              sources.use = NULL, targets.use = NULL, remove.isolate = FALSE, row.show = NULL, col.show = NULL, as.ggplot = FALSE){
   if (!is.null(measure)) {
     measure <- match.arg(measure)
   }
@@ -2055,33 +2092,45 @@ netVisual_heatmap <- function(object, comparison = c(1,2), measure = c("count", 
 
   df.col<- data.frame(group = colnames(mat)); rownames(df.col) <- colnames(mat)
   df.row<- data.frame(group = rownames(mat)); rownames(df.row) <- rownames(mat)
-  col_annotation <- HeatmapAnnotation(df = df.col, col = list(group = color.use.col),which = "column",
-                                      show_legend = FALSE, show_annotation_name = FALSE,
-                                      simple_anno_size = grid::unit(0.2, "cm"))
-  row_annotation <- HeatmapAnnotation(df = df.row, col = list(group = color.use.row), which = "row",
-                                      show_legend = FALSE, show_annotation_name = FALSE,
-                                      simple_anno_size = grid::unit(0.2, "cm"))
 
-  ha1 = rowAnnotation(Strength = anno_barplot(rowSums(abs(mat)), border = FALSE,gp = gpar(fill = color.use.row, col=color.use.row)), show_annotation_name = FALSE)
-  ha2 = HeatmapAnnotation(Strength = anno_barplot(colSums(abs(mat)), border = FALSE,gp = gpar(fill = color.use.col, col=color.use.col)), show_annotation_name = FALSE)
+  # unique names, so that the legends and annotations are not merged when heatmaps are concatenated with `+`
+  ht.name <- uniqueHeatmapName(title.name)
+  colnames(df.col) <- colnames(df.row) <- paste0(ht.name, " group")
+  col.anno <- list(color.use.col); names(col.anno) <- colnames(df.col)
+  row.anno <- list(color.use.row); names(row.anno) <- colnames(df.row)
+  col_annotation <- HeatmapAnnotation(df = df.col, col = col.anno, which = "column",
+                                      show_legend = FALSE, show_annotation_name = FALSE,
+                                      simple_anno_size = grid::unit(0.2, "cm"))
+  row_annotation <- HeatmapAnnotation(df = df.row, col = row.anno, which = "row",
+                                      show_legend = FALSE, show_annotation_name = FALSE,
+                                      simple_anno_size = grid::unit(0.2, "cm"))
+  legend.size <- ifelse(usePublicationStyle(), font.size, 8)
+  axis.param <- list(gp = gpar(fontsize = ifelse(usePublicationStyle(), max(6, 0.6 * font.size), 8)))
+  bar.right <- anno_barplot(rowSums(abs(mat)), which = "row", border = FALSE,gp = gpar(fill = color.use.row, col=color.use.row), add_numbers=FALSE,ylim = ylim.right, axis_param = axis.param)
+  bar.top <- anno_barplot(colSums(abs(mat)), border = FALSE,gp = gpar(fill = color.use.col, col=color.use.col), add_numbers=FALSE,ylim = ylim.top, axis_param = axis.param)
+  ha1 = do.call(rowAnnotation, c(stats::setNames(list(bar.right), paste0(ht.name, " strength (rows)")), list(show_annotation_name = FALSE)))
+  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(bar.top), paste0(ht.name, " strength (columns)")), list(show_annotation_name = FALSE)))
 
   if (sum(abs(mat) > 0) == 1) {
     color.heatmap.use = c("white", color.heatmap.use)
   } else {
     mat[mat == 0] <- NA
   }
-  ht1 = Heatmap(mat, col = color.heatmap.use, na_col = "white", name = legend.name,
+  ht1 = Heatmap(mat, col = color.heatmap.use, na_col = "white", name = ht.name,
                 bottom_annotation = col_annotation, left_annotation =row_annotation, top_annotation = ha2, right_annotation = ha1,
-                cluster_rows = cluster.rows,cluster_columns = cluster.rows,
+                cluster_rows = cluster.rows,cluster_columns = cluster.cols,
                 row_names_side = "left",row_names_rot = 0,row_names_gp = gpar(fontsize = font.size),column_names_gp = gpar(fontsize = font.size),
                 # width = unit(width, "cm"), height = unit(height, "cm"),
                 column_title = title.name,column_title_gp = gpar(fontsize = font.size.title),column_names_rot = 90,
                 row_title = "Sources (Sender)",row_title_gp = gpar(fontsize = font.size.title),row_title_rot = 90,
-                heatmap_legend_param = list(title_gp = gpar(fontsize = 8, fontface = "plain"),title_position = "leftcenter-rot",
+                heatmap_legend_param = list(title = legend.name, title_gp = gpar(fontsize = legend.size, fontface = "plain"),title_position = "leftcenter-rot",
                                             border = NA, #at = colorbar.break,
-                                            legend_height = unit(20, "mm"),labels_gp = gpar(fontsize = 8),grid_width = unit(2, "mm"))
+                                            legend_height = unit(max(20, 2.5 * legend.size), "mm"),labels_gp = gpar(fontsize = legend.size),grid_width = unit(2, "mm"))
   )
   #  draw(ht1)
+  if (as.ggplot) {
+    return(heatmapToGgplot(ht1))
+  }
   return(ht1)
 }
 
@@ -2303,6 +2352,12 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
 
   if (is.null(comparison)) {
     cells.level <- levels(object@idents)
+    if (is.null(sources.use)) {
+      sources.use <- cells.level
+    }
+    if (is.null(targets.use)) {
+      targets.use <- cells.level
+    }
     if (is.numeric(sources.use)) {
       sources.use <- cells.level[sources.use]
     }
@@ -2315,7 +2370,9 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
                                   pairLR.use = pairLR.use,
                                   thresh = thresh)
     df.net$source.target <- paste(df.net$source, df.net$target, sep = " -> ")
-    source.target <- paste(rep(sources.use, each = length(targets.use)), targets.use, sep = " -> ")
+    if (!(is.null(sources.use) || is.null(targets.use))){
+      source.target <- paste(rep(sources.use, each = length(targets.use)), targets.use, sep = " -> ")
+    }
     source.target.isolate <- setdiff(source.target, unique(df.net$source.target))
     if (length(source.target.isolate) > 0) {
       df.net.isolate <- as.data.frame(matrix(NA, nrow = length(source.target.isolate), ncol = ncol(df.net)))
@@ -2355,6 +2412,20 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
     df.net$source.target <- factor(df.net$source.target, levels = cells.order)
     df <- df.net
   } else {
+    cells.level <- levels(object@idents$joint)
+    if (is.null(sources.use)) {
+      sources.use <- cells.level
+    }
+    if (is.null(targets.use)) {
+      targets.use <- cells.level
+    }
+    if (is.numeric(sources.use)) {
+      sources.use <- cells.level[sources.use]
+    }
+    if (is.numeric(targets.use)) {
+      targets.use <- cells.level[targets.use]
+    }
+
     dataset.name <- names(object@net)
     df.net.all <- subsetCommunication(object, slot.name = "net",
                                       sources.use = sources.use, targets.use = targets.use,
@@ -2364,14 +2435,7 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
     df.all <- data.frame()
     group.names.all <- c()
     for (ii in 1:length(comparison)) {
-      cells.level <- levels(object@idents[[comparison[ii]]])
-      if (is.numeric(sources.use)) {
-        sources.use <- cells.level[sources.use]
-      }
-      if (is.numeric(targets.use)) {
-        targets.use <- cells.level[targets.use]
-      }
-
+      #cells.level <- levels(object@idents[[comparison[ii]]])
       df.net <- df.net.all[[comparison[ii]]]
       df.net$interaction_name_2 <- as.character(df.net$interaction_name_2)
       df.net$source.target <- paste(df.net$source, df.net$target, sep = " -> ")
@@ -2639,8 +2703,6 @@ netVisual_bubble <- function(object, sources.use = NULL, targets.use = NULL, sig
   }
 
 }
-
-
 
 
 #' Chord diagram for visualizing cell-cell communication for a signaling pathway
@@ -3869,7 +3931,7 @@ netVisual_embeddingPairwise <- function(object, slot.name = "netP", type = c("fu
     for (i in 1:length(prob)) {
       probi <- prob[[i]]
       pathway.remove.idx <- which(paste0(dimnames(probi)[[3]],"--",object.names[i]) %in% pathway.remove)
-    #  pathway.remove.idx <- which(dimnames(probi)[[3]] %in% pathway.remove)
+      #  pathway.remove.idx <- which(dimnames(probi)[[3]] %in% pathway.remove)
       if (length(pathway.remove.idx) > 0) {
         probi <- probi[ , , -pathway.remove.idx]
       }
@@ -3907,7 +3969,22 @@ netVisual_embeddingPairwise <- function(object, slot.name = "netP", type = c("fu
   gg <- gg + scale_fill_manual(values = ggplot2::alpha(color.use, alpha = dot.alpha), drop = FALSE) #+ scale_alpha(group, range = c(0.1, 1))
   gg <- gg + scale_colour_manual(values = color.use, drop = FALSE)
   gg <- gg + scale_shape_manual(values = point.shape[1:length(prob)])
+
   if (do.label) {
+    if (is.null(pathway.labeled)) {
+      if (top.label < 1) {
+        if (length(comparison) == 2) {
+          g.t <- rankSimilarity(object, slot.name = slot.name, type = type, comparison1 = comparison)
+          pathway.labeled <- as.character(g.t$data$name[(nrow(g.t$data)-ceiling(top.label * nrow(g.t$data))+1):nrow(g.t$data) ])
+          data.label <- df[df$labels %in% pathway.labeled, , drop = FALSE]
+        }
+      } else {
+        data.label <- df
+      }
+
+    } else {
+      data.label <- df[df$labels %in% pathway.labeled, , drop = FALSE]
+    }
     gg <- gg + ggrepel::geom_text_repel(mapping = aes(label = labels, colour = clusters, alpha=group), size = label.size, show.legend = F,segment.size = 0.2, segment.alpha = 0.5) + scale_alpha_discrete(range = c(1, 0.6))
   }
 
@@ -3924,6 +4001,7 @@ netVisual_embeddingPairwise <- function(object, slot.name = "netP", type = c("fu
   }
   gg
 }
+
 
 
 
@@ -4855,3 +4933,7 @@ spatialFeaturePlot <- function(object, features = NULL, signaling = NULL, pairLR
   }
   return(gg)
 }
+
+
+
+

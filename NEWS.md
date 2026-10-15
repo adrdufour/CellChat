@@ -17,6 +17,12 @@
 ## Biological replicates
 - `identifyOverExpressedGenes(group.replicate = "orig.ident")`: differential expression between conditions at the level of the biological replicates (pseudobulk per replicate and cell group), using limma (`replicate.method = "limma"`, recommended) or a Welch t-test; `paired.replicate = TRUE` for paired designs (same donors in the conditions); `min.cells.replicate` sets the minimum number of cells of a replicate in a cell group. The output is compatible with `netMappingDEG`/`subsetCommunication`.
 
+- `identifyOverExpressedGenes(covariates = "sexe")`: sample-level covariates in the pseudobulk analysis (limma model `~ covariates + condition`), e.g. to compare conditions within each sex when samples of both sexes are pooled.
+
+## Heatmaps
+- `netVisual_heatmap` and `netAnalysis_signalingRole_heatmap`: `cluster.cols` was ignored (the columns followed `cluster.rows`); each heatmap now has a unique name, which fixes the merged legends and the error "Viewport 'Relative values_heatmap_body_1_1' was not found" when displaying `gg1 + gg2` (e.g., in Jupyter).
+- New `as.ggplot = TRUE` (and `heatmapToGgplot()`): returns a patchwork-compatible object, so that `gg1 + gg2` shows independent heatmaps (own clustering and legend) and can be saved with `ggsave`.
+
 ## Publication-ready figures
 - New `theme_cellchat()` (black text, thin axes, compact legends) and colorblind-friendly `datasetPalette()` (Okabe-Ito), used by default by `rankNet`, `compareInteractions`, `netVisual_bubble` (viridis color scale), `netAnalysis_signalingRole_scatter`, `netAnalysis_diff_signalingRole_scatter`, `netAnalysis_signalingChanges_scatter`, `rankSimilarity`, `netVisual_barplot` and the embedding plots.
 - `options(CellChat.publication = FALSE)` restores the original style (identical rendering).

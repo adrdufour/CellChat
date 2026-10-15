@@ -687,6 +687,7 @@ netEmbedding <- function(object, slot.name = "netP", type = c("functional","stru
   }
   methods::slot(object, slot.name)$similarity[[type]]$dr[[comparison.name]] <- Y
   return(object)
+
 }
 
 
@@ -733,7 +734,7 @@ netClustering <- function(object, slot.name = "netP", type = c("functional","str
       N <- nrow(data.use)
       kRange <- seq(2,min(N-1, 10),by = 1)
       if (do.parallel) {
-        future::plan("multisession", workers = nCores)
+        with(future::plan("multisession", workers = nCores), local = TRUE)
         options(future.globals.maxSize = 1000 * 1024^2)
       }
       my.sapply <- ifelse(
@@ -1995,7 +1996,6 @@ subsetCommunication <- function(object = NULL, net = NULL, slot.name = "net",
     if (is.null(net)) {
       net0 <- slot(object, "net")
       df.net <- vector("list", length(net0))
-      names(df.net) <- names(net0)
       for (i in 1:length(net0)) {
         net <- net0[[i]]
         LR <- object@LR[[i]]$LRsig
@@ -2029,6 +2029,8 @@ subsetCommunication <- function(object = NULL, net = NULL, slot.name = "net",
       for (i in idx.empty) {
         df.net[[i]] <- df.net[[setdiff(seq_along(df.net), idx.empty)[1]]][0, , drop = FALSE]
       }
+      names(df.net) <- names(net0)
+
     } else {
       LR <- data.frame()
       for (i in 1:length(object@LR)) {
@@ -2272,14 +2274,6 @@ subsetCommunication_internal <- function(net, LR, cells.level, slot.name = "net"
   return(net)
 
 }
-
-
-
-
-
-
-
-
 
 
 #' Heatmap showing the centrality scores/importance of cell groups as senders, receivers, mediators and influencers in a single intercellular communication network
@@ -2862,10 +2856,13 @@ netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use =
 #' @param title title name
 #' @param width width of heatmap
 #' @param height height of heatmap
+#' @param ylim.top set the range of the top barplot (e.g., ylim.top = c(0, 4))
+#' @param ylim.right set the range of the right barplot (e.g., ylim.right = c(0, 5))
 #' @param font.size fontsize in heatmap
 #' @param font.size.title font size of the title
 #' @param cluster.rows whether cluster rows
 #' @param cluster.cols whether cluster columns
+#' @param as.ggplot whether to return a patchwork-compatible object (see `heatmapToGgplot`), e.g. to show the outgoing and incoming heatmaps side by side with `gg1 + gg2`
 #' @importFrom methods slot
 #' @importFrom grDevices colorRampPalette
 #' @importFrom RColorBrewer brewer.pal
@@ -2876,8 +2873,9 @@ netAnalysis_signalingChanges_scatter <- function(object, idents.use, color.use =
 #' @export
 #'
 netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern = c("outgoing", "incoming","all"), slot.name = "netP",
-                                              color.use = NULL, color.heatmap = "BuGn",
-                                              title = NULL, width = 10, height = 8, font.size = 8, font.size.title = 10, cluster.rows = FALSE, cluster.cols = FALSE){
+                                              color.use = NULL, color.heatmap = "BuGn", title = NULL,
+                                              width = 10, height = 8, ylim.top = NULL, ylim.right = NULL, font.size = 8, font.size.title = 10, cluster.rows = FALSE, cluster.cols = FALSE,
+                                              as.ggplot = FALSE){
   pattern <- match.arg(pattern)
   if (length(slot(object, slot.name)$centr) == 0) {
     stop("Please run `netAnalysis_computeCentrality` to compute the network centrality scores! ")
@@ -2926,11 +2924,14 @@ netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern 
 
   df<- data.frame(group = colnames(mat)); rownames(df) <- colnames(mat)
   names(color.use) <- colnames(mat)
-  col_annotation <- HeatmapAnnotation(df = df, col = list(group = color.use),which = "column",
+  # unique names, so that the legends and annotations are not merged when heatmaps are concatenated with `+`
+  ht.name <- uniqueHeatmapName(title)
+  colnames(df) <- paste0(ht.name, " group")
+  col.anno <- list(color.use); names(col.anno) <- colnames(df)
+  col_annotation <- HeatmapAnnotation(df = df, col = col.anno,which = "column",
                                       show_legend = FALSE, show_annotation_name = FALSE,
                                       simple_anno_size = grid::unit(0.2, "cm"))
-  ha2 = HeatmapAnnotation(Strength = anno_barplot(colSums(mat.ori), border = FALSE,gp = gpar(fill = color.use, col=color.use)), show_annotation_name = FALSE)
-
+  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(anno_barplot(colSums(mat.ori), border = FALSE,gp = gpar(fill = color.use, col=color.use),add_numbers=FALSE,ylim = ylim.top)), paste0(ht.name, " strength (columns)")), list(show_annotation_name = FALSE)))
   pSum <- rowSums(mat.ori)
   pSum.original <- pSum
   pSum <- -1/log(pSum)
@@ -2942,24 +2943,27 @@ netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern 
     pSum[idx1] <- values.assign[match(1:length(idx1), position)]
   }
 
-  ha1 = rowAnnotation(Strength = anno_barplot(pSum, border = FALSE), show_annotation_name = FALSE)
+  ha1 = do.call(rowAnnotation, c(stats::setNames(list(anno_barplot(pSum, which = "row", border = FALSE, add_numbers=FALSE,ylim = ylim.right)), paste0(ht.name, " strength (rows)")), list(show_annotation_name = FALSE)))
 
   if (min(mat, na.rm = T) == max(mat, na.rm = T)) {
     legend.break <- max(mat, na.rm = T)
   } else {
     legend.break <- c(round(min(mat, na.rm = T), digits = 1), round(max(mat, na.rm = T), digits = 1))
   }
-  ht1 = Heatmap(mat, col = color.heatmap.use, na_col = "white", name = "Relative strength",
+  ht1 = Heatmap(mat, col = color.heatmap.use, na_col = "white", name = ht.name,
                 bottom_annotation = col_annotation, top_annotation = ha2, right_annotation = ha1,
-                cluster_rows = cluster.rows,cluster_columns = cluster.rows,
+                cluster_rows = cluster.rows,cluster_columns = cluster.cols,
                 row_names_side = "left",row_names_rot = 0,row_names_gp = gpar(fontsize = font.size),column_names_gp = gpar(fontsize = font.size),
                 width = unit(width, "cm"), height = unit(height, "cm"),
                 column_title = title,column_title_gp = gpar(fontsize = font.size.title),column_names_rot = 90,
-                heatmap_legend_param = list(title_gp = gpar(fontsize = 8, fontface = "plain"),title_position = "leftcenter-rot",
+                heatmap_legend_param = list(title = "Relative strength", title_gp = gpar(fontsize = 8, fontface = "plain"),title_position = "leftcenter-rot",
                                             border = NA, at = legend.break,
                                             legend_height = unit(20, "mm"),labels_gp = gpar(fontsize = 8),grid_width = unit(2, "mm"))
   )
   #  draw(ht1)
+  if (as.ggplot) {
+    return(heatmapToGgplot(ht1))
+  }
   return(ht1)
 }
 
@@ -3004,7 +3008,16 @@ netMappingDEG <- function(object, features.name, variable.all = TRUE, thresh = 0
   net$source.ligand <- paste0(net$source,".", net$ligand)
   net$target.receptor <- paste0(net$target,".", net$receptor)
 
-  DEG$clusters.features <- paste0(DEG$clusters,".", DEG$features)
+  if (is.null(DEG) || nrow(DEG) == 0) {
+    warning("No differentially expressed genes are stored in `object@var.features[['", features.name, "']]`: the DEG columns of the result are NA. ",
+            "Please relax the thresholds used in `identifyOverExpressedGenes` (e.g., `thresh.fc`, `thresh.p.adj`, `thresh.pc`, or `min.cells.replicate` with `group.replicate`).", call. = FALSE)
+    DEG <- data.frame(clusters = character(0), features = character(0), pvalues = numeric(0), logFC = numeric(0),
+                      pct.1 = numeric(0), pct.2 = numeric(0), pvalues.adj = numeric(0), stringsAsFactors = FALSE)
+  }
+  if (!all(c("clusters", "features", "pvalues", "logFC", "pct.1", "pct.2") %in% colnames(DEG))) {
+    stop("`object@var.features[['", features.name, "']]` does not contain the differential expression results. Please run `identifyOverExpressedGenes` with `do.DE = TRUE`.")
+  }
+  DEG$clusters.features <- paste0(DEG$clusters, rep(".", nrow(DEG)), DEG$features)
   # one row per cell group and gene (the first one, i.e., the most significant one, is used)
   DEG <- DEG[!duplicated(DEG$clusters.features), , drop = FALSE]
   if (!("pvalues.adj" %in% colnames(DEG))) {

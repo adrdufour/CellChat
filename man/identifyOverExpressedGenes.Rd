@@ -27,6 +27,7 @@ identifyOverExpressedGenes(
   replicate.method = c("limma", "t.test"),
   paired.replicate = FALSE,
   min.cells.replicate = 10,
+  covariates = NULL,
   do.DE = TRUE,
   do.fast = TRUE,
   min.cells = 10
@@ -84,6 +85,10 @@ logFC is the difference of the mean pseudobulk expression between conditions (na
 \item{paired.replicate}{whether the replicate labels identify the same individuals/donors in the different conditions (paired design, e.g. before/after treatment). Default = FALSE: replicates are considered as different samples in each condition, even if they share the same label (e.g., "rep1" in each condition).}
 
 \item{min.cells.replicate}{the minimum number of cells of a replicate in a cell group for this replicate to be used in the pseudobulk analysis of this cell group. Default = 10}
+
+\item{covariates}{column names of `object@meta` used as covariates in the pseudobulk analysis (requires `group.replicate` and replicate.method = "limma"), e.g., covariates = "sex".
+The covariates should be constant within each replicate. The model is then `~ covariates + condition`: the conditions are compared within each level of the covariates (e.g., males with males and females with females),
+which removes the variability due to the covariates, and logFC is the effect of the condition adjusted for the covariates.}
 
 \item{do.DE}{Whether to perform differential expression analysis. By default do.DE = TRUE; When do.DE = FALSE, selecting over-expressed genes that are expressed in more than `min.cells` cells.}
 

@@ -14,6 +14,7 @@ pseudobulkDE(
   method = c("limma", "t.test"),
   paired = FALSE,
   min.cells = 10,
+  covariates = NULL,
   thresh.pc = 0,
   p.adjust.method = "BH",
   n.features = nrow(data.use)
@@ -37,6 +38,8 @@ pseudobulkDE(
 \item{paired}{whether the replicate labels identify the same donors in the different conditions}
 
 \item{min.cells}{the minimum number of cells of a replicate in a cell group}
+
+\item{covariates}{a data frame of covariates for each cell (constant within each replicate), or NULL}
 
 \item{thresh.pc}{genes expressed in less than this fraction of cells in both conditions are not tested}
 
