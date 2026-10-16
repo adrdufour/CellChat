@@ -412,7 +412,7 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
   } else {
     features.use <- intersect(features, row.names(X))
   }
-  data.use <- X[features.use,]
+  data.use <- X[features.use, , drop = FALSE]
 
   if (do.DE) {
     # select genes based on differential expression
@@ -1100,6 +1100,10 @@ identifyOverExpressedInteractions <- function(object, features.name = "features"
   pairLRsig <- interaction_input[index.sig, ]
   object@LR$LRsig <- pairLRsig
   cat("The number of highly variable ligand-receptor pairs used for signaling inference is", nrow(pairLRsig), '\n')
+  if (nrow(pairLRsig) == 0) {
+    warning("No ligand-receptor pairs are selected: ", length(features.sig), " over-expressed signaling genes are available in `object@var.features[['", features.name, "']]`. ",
+            "Please relax the thresholds of `identifyOverExpressedGenes` (the default thresholds are recommended before `computeCommunProb`).", call. = FALSE)
+  }
   if (return.object) {
     return(object)
   } else {

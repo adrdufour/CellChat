@@ -97,6 +97,14 @@ computeCommunProb <- function(object, type = c("triMean", "truncatedMean","thres
   ptm = Sys.time()
 
   pairLRsig <- pairLR.use
+  if (is.null(pairLRsig) || nrow(pairLRsig) == 0) {
+    n.genes <- length(object@var.features[["features"]])
+    stop("No ligand-receptor pairs are available for the inference (`object@LR$LRsig` is empty; ", n.genes,
+         " over-expressed signaling genes were identified by `identifyOverExpressedGenes`). ",
+         "The thresholds of `identifyOverExpressedGenes` (e.g., `thresh.fc`, `thresh.p.adj`) are probably too strict for this step, ",
+         "which only selects the signaling genes expressed by each cell group: the default thresholds are recommended here. ",
+         "Then run `identifyOverExpressedInteractions` again.", call. = FALSE)
+  }
   group <- object@idents
   geneL <- as.character(pairLRsig$ligand)
   geneR <- as.character(pairLRsig$receptor)
@@ -532,7 +540,7 @@ computeExpr_complex <- function(complex_input, data.use, complex) {
     no = future.apply::future_sapply
   )
   data.complex = my.sapply(
-    X = 1:nrow(Rsubunits),
+    X = seq_len(nrow(Rsubunits)),
     FUN = function(x) {
       RsubunitsV <- unlist(Rsubunits[x,], use.names = F)
       RsubunitsV <- RsubunitsV[RsubunitsV != ""]
@@ -563,7 +571,7 @@ computeExpr_complex <- function(complex_input, data.use, complex) {
     no = future.apply::future_sapply
   )
   data.complex = my.sapply(
-    X = 1:nrow(Rsubunits),
+    X = seq_len(nrow(Rsubunits)),
     FUN = function(x) {
       RsubunitsV <- unlist(Rsubunits[x,], use.names = F)
       RsubunitsV <- RsubunitsV[RsubunitsV != ""]
@@ -599,7 +607,7 @@ computeExpr_LR <- function(geneLR, data.use, complex_input){
   dataL1avg <- data.use[geneLR[index.singleL],]
   dataLavg <- matrix(nrow = nLR, ncol = numCluster)
   dataLavg[index.singleL,] <- dataL1avg
-  index.complexL <- setdiff(1:nLR, index.singleL)
+  index.complexL <- setdiff(seq_len(nLR), index.singleL)
   if (length(index.complexL) > 0) {
     complex <- geneLR[index.complexL]
     data.complex <- computeExpr_complex(complex_input, data.use, complex)
