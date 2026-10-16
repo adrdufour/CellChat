@@ -412,7 +412,7 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
   } else {
     features.use <- intersect(features, row.names(X))
   }
-  data.use <- X[features.use,]
+  data.use <- X[features.use, , drop = FALSE]
 
   if (do.DE) {
     # select genes based on differential expression
