@@ -16,6 +16,7 @@ pseudobulkDE(
   min.cells = 10,
   covariates = NULL,
   thresh.pc = 0,
+  min.pct.test = NULL,
   p.adjust.method = "BH",
   n.features = nrow(data.use)
 )
@@ -42,6 +43,8 @@ pseudobulkDE(
 \item{covariates}{a data frame of covariates for each cell (constant within each replicate), or NULL}
 
 \item{thresh.pc}{genes expressed in less than this fraction of cells in both conditions are not tested}
+
+\item{min.pct.test}{genes expressed in less than this fraction of the cells of a cell group (conditions pooled) are not tested and not counted in the adjustment (independent filtering); NULL to count all the genes}
 
 \item{p.adjust.method}{the method used to adjust the p-values within each cell group}
 

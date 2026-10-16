@@ -374,6 +374,10 @@ subsetData <- function(object, features = NULL) {
 #' @param replicate.method the test used with `group.replicate`: "limma" (moderated t-test from the limma package; recommended for few replicates) or "t.test" (Welch t-test, or paired t-test when `paired.replicate = TRUE`)
 #' @param paired.replicate whether the replicate labels identify the same individuals/donors in the different conditions (paired design, e.g. before/after treatment). Default = FALSE: replicates are considered as different samples in each condition, even if they share the same label (e.g., "rep1" in each condition).
 #' @param min.cells.replicate the minimum number of cells of a replicate in a cell group for this replicate to be used in the pseudobulk analysis of this cell group. Default = 10
+#' @param min.pct.test with `group.replicate`: the genes expressed in less than this fraction of the cells of a cell group (all the compared cells pooled, whatever their condition) are not tested in this cell group
+#' and are not counted in the multiple-testing adjustment, e.g., min.pct.test = 0.05. This independent filtering (Bourgon et al., PNAS 2010) does not use the condition labels, hence it keeps the control of the false discovery rate
+#' while increasing the power: the adjustment no longer pays for the genes that are hardly expressed in a cell group, which cannot be detected as differentially expressed and can hardly be involved in an inferred communication.
+#' Default = NULL: all the genes are counted in the adjustment (conservative). NB: `thresh.pc` uses the fraction of expressing cells within each condition and the genes it removes are still counted in the adjustment.
 #' @param covariates column names of `object@meta` used as covariates in the pseudobulk analysis (requires `group.replicate` and replicate.method = "limma"), e.g., covariates = "sex".
 #' The covariates should be constant within each replicate. The model is then `~ covariates + condition`: the conditions are compared within each level of the covariates (e.g., males with males and females with females),
 #' which removes the variability due to the covariates, and logFC is the effect of the condition adjusted for the covariates.
@@ -394,9 +398,12 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
                                        group.dataset = NULL, pos.dataset = NULL, neg.dataset = NULL, group.DE.combined = FALSE,
                                        features.name = "features",  only.pos = TRUE, features = NULL, return.object = TRUE,
                                        thresh.pc = 0, thresh.fc = 0, thresh.p = 0.05, thresh.p.adj = NULL, p.adjust.method = "BH",
-                                       group.replicate = NULL, replicate.method = c("limma", "t.test"), paired.replicate = FALSE, min.cells.replicate = 10, covariates = NULL,
+                                       group.replicate = NULL, replicate.method = c("limma", "t.test"), paired.replicate = FALSE, min.cells.replicate = 10, min.pct.test = NULL, covariates = NULL,
                                        do.DE = TRUE, do.fast = TRUE, min.cells = 10) {
   p.adjust.method <- match.arg(p.adjust.method, stats::p.adjust.methods)
+  if (!is.null(min.pct.test) && is.null(group.replicate)) {
+    warning("`min.pct.test` is only used with `group.replicate` (pseudobulk analysis); it is ignored.", call. = FALSE)
+  }
   if (!is.list(object@var.features)) {
     stop("Please update your CellChat object via `updateCellChat()`")
   }
@@ -502,7 +509,7 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
       markers.all <- pseudobulkDE(data.use, clusters = clusters.use, level.use = level.use.pb,
                                   conditions = labels.dataset, pos.dataset = pos.dataset, replicates = labels.replicate,
                                   method = replicate.method, paired = paired.replicate, min.cells = min.cells.replicate, covariates = covariates.data,
-                                  thresh.pc = thresh.pc, p.adjust.method = p.adjust.method, n.features = length(features.use))
+                                  thresh.pc = thresh.pc, min.pct.test = min.pct.test, p.adjust.method = p.adjust.method, n.features = length(features.use))
       if (group.DE.combined && nrow(markers.all) > 0) {
         markers.all <- do.call(rbind, lapply(level.use, function(x) {markers.all$clusters <- x; markers.all}))
       }
@@ -760,13 +767,17 @@ identifyOverExpressedGenes <- function(object, data.use = NULL, group.by = NULL,
 #' @param min.cells the minimum number of cells of a replicate in a cell group
 #' @param covariates a data frame of covariates for each cell (constant within each replicate), or NULL
 #' @param thresh.pc genes expressed in less than this fraction of cells in both conditions are not tested
+#' @param min.pct.test genes expressed in less than this fraction of the cells of a cell group (conditions pooled) are not tested and not counted in the adjustment (independent filtering); NULL to count all the genes
 #' @param p.adjust.method the method used to adjust the p-values within each cell group
 #' @param n.features the number of features used for the adjustment (genes not tested are counted as tests)
 #' @return a data frame with the columns clusters, features, pvalues, logFC, pct.1, pct.2, pvalues.adj, n.replicates.1, n.replicates.2
 #' @keywords internal
 pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset, replicates, method = c("limma", "t.test"),
-                         paired = FALSE, min.cells = 10, covariates = NULL, thresh.pc = 0, p.adjust.method = "BH", n.features = nrow(data.use)) {
+                         paired = FALSE, min.cells = 10, covariates = NULL, thresh.pc = 0, min.pct.test = NULL, p.adjust.method = "BH", n.features = nrow(data.use)) {
   method <- match.arg(method)
+  if (!is.null(min.pct.test) && (!is.numeric(min.pct.test) || length(min.pct.test) != 1 || min.pct.test < 0 || min.pct.test >= 1)) {
+    stop("`min.pct.test` should be a fraction of cells in [0, 1), e.g., 0.05")
+  }
   if (!is.null(covariates) && method != "limma") {
     stop("`covariates` require replicate.method = 'limma'")
   }
@@ -846,7 +857,16 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     # fraction of expressing cells in each condition
     pct.1 <- Matrix::rowMeans(data.use[, idx[is.pos[idx]], drop = FALSE] > 0)
     pct.2 <- Matrix::rowMeans(data.use[, idx[!is.pos[idx]], drop = FALSE] > 0)
-    features <- rownames(pb)[which(pmax(pct.1, pct.2) > thresh.pc & apply(pb, 1, stats::var) > 0 & rowSums(!is.finite(pb)) == 0)]
+    testable <- pmax(pct.1, pct.2) > thresh.pc & apply(pb, 1, stats::var) > 0 & rowSums(!is.finite(pb)) == 0
+    n.tests <- max(n.features, sum(testable))
+    if (!is.null(min.pct.test)) {
+      # independent filtering: the fraction of expressing cells of the cell group, all the compared cells pooled, does not depend on the condition labels;
+      # the genes below `min.pct.test` are neither tested nor counted in the adjustment
+      pct.pooled <- Matrix::rowMeans(data.use[, idx, drop = FALSE] > 0)
+      testable <- testable & pct.pooled >= min.pct.test
+      n.tests <- sum(pct.pooled >= min.pct.test)
+    }
+    features <- rownames(pb)[which(testable)]
     if (length(features) == 0) next
     pb <- pb[features, , drop = FALSE]
     if (paired) {
@@ -905,7 +925,7 @@ pseudobulkDE <- function(data.use, clusters, level.use, conditions, pos.dataset,
     pvalues[is.na(pvalues)] <- 1
     res[[cl]] <- data.frame(clusters = cl, features = features, pvalues = as.numeric(pvalues), logFC = as.numeric(logFC),
                             pct.1 = as.numeric(pct.1[features]), pct.2 = as.numeric(pct.2[features]),
-                            pvalues.adj = stats::p.adjust(as.numeric(pvalues), method = p.adjust.method, n = max(n.features, length(features))),
+                            pvalues.adj = stats::p.adjust(as.numeric(pvalues), method = p.adjust.method, n = max(n.tests, length(features))),
                             n.replicates.1 = sum(sample.pos), n.replicates.2 = sum(!sample.pos), stringsAsFactors = FALSE)
   }
   if (length(skipped) > 0) {
