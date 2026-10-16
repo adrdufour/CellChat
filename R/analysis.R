@@ -2926,12 +2926,12 @@ netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern 
   names(color.use) <- colnames(mat)
   # unique names, so that the legends and annotations are not merged when heatmaps are concatenated with `+`
   ht.name <- uniqueHeatmapName(title)
-  colnames(df) <- paste0(ht.name, " group")
+  colnames(df) <- paste0(ht.name, "_group")
   col.anno <- list(color.use); names(col.anno) <- colnames(df)
   col_annotation <- HeatmapAnnotation(df = df, col = col.anno,which = "column",
                                       show_legend = FALSE, show_annotation_name = FALSE,
                                       simple_anno_size = grid::unit(0.2, "cm"))
-  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(anno_barplot(colSums(mat.ori), border = FALSE,gp = gpar(fill = color.use, col=color.use),add_numbers=FALSE,ylim = ylim.top)), paste0(ht.name, " strength (columns)")), list(show_annotation_name = FALSE)))
+  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(anno_barplot(colSums(mat.ori), border = FALSE,gp = gpar(fill = color.use, col=color.use),add_numbers=FALSE,ylim = ylim.top)), paste0(ht.name, "_strength_columns")), list(show_annotation_name = FALSE)))
   pSum <- rowSums(mat.ori)
   pSum.original <- pSum
   pSum <- -1/log(pSum)
@@ -2943,7 +2943,7 @@ netAnalysis_signalingRole_heatmap <- function(object, signaling = NULL, pattern 
     pSum[idx1] <- values.assign[match(1:length(idx1), position)]
   }
 
-  ha1 = do.call(rowAnnotation, c(stats::setNames(list(anno_barplot(pSum, which = "row", border = FALSE, add_numbers=FALSE,ylim = ylim.right)), paste0(ht.name, " strength (rows)")), list(show_annotation_name = FALSE)))
+  ha1 = do.call(rowAnnotation, c(stats::setNames(list(anno_barplot(pSum, which = "row", border = FALSE, add_numbers=FALSE,ylim = ylim.right)), paste0(ht.name, "_strength_rows")), list(show_annotation_name = FALSE)))
 
   if (min(mat, na.rm = T) == max(mat, na.rm = T)) {
     legend.break <- max(mat, na.rm = T)

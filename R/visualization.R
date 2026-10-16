@@ -120,7 +120,9 @@ datasetPalette <- function(n) {
 uniqueHeatmapName <- function(prefix = "heatmap") {
   n <- getOption("CellChat.heatmap.counter", 0) + 1
   options(CellChat.heatmap.counter = n)
-  paste0(prefix, " #", n)
+  # only letters, digits and underscores: ComplexHeatmap builds viewport names from the heatmap names
+  prefix <- gsub("^_+|_+$", "", gsub("[^A-Za-z0-9]+", "_", prefix))
+  paste0(ifelse(nchar(prefix) > 0, prefix, "heatmap"), "_", n)
 }
 
 #' Convert a ComplexHeatmap object into a patchwork element
@@ -138,6 +140,15 @@ uniqueHeatmapName <- function(prefix = "heatmap") {
 #' gg1 + gg2
 #' }
 heatmapToGgplot <- function(ht, ...) {
+  # Under Jupyter (IRkernel loaded), ComplexHeatmap::draw() wraps the drawing in its own grid.grabExpr();
+  # nested in the grid.grabExpr() below, the viewports are lost ("Viewport 'GRID.VP.xx' was not found").
+  # ComplexHeatmap skips its Jupyter mode when its internal flag IS_UNDER_JUPYTER_IGNORE is TRUE.
+  ch.env <- tryCatch(get(".ENV", envir = asNamespace("ComplexHeatmap")), error = function(e) NULL)
+  if (is.environment(ch.env) && !is.null(ch.env$IS_UNDER_JUPYTER_IGNORE)) {
+    old.flag <- ch.env$IS_UNDER_JUPYTER_IGNORE
+    ch.env$IS_UNDER_JUPYTER_IGNORE <- TRUE
+    on.exit(ch.env$IS_UNDER_JUPYTER_IGNORE <- old.flag, add = TRUE)
+  }
   grob <- grid::grid.grabExpr(ComplexHeatmap::draw(ht, ...), wrap.grobs = TRUE)
   patchwork::wrap_elements(full = grob)
 }
@@ -2095,7 +2106,7 @@ netVisual_heatmap <- function(object, comparison = c(1,2), measure = c("count", 
 
   # unique names, so that the legends and annotations are not merged when heatmaps are concatenated with `+`
   ht.name <- uniqueHeatmapName(title.name)
-  colnames(df.col) <- colnames(df.row) <- paste0(ht.name, " group")
+  colnames(df.col) <- colnames(df.row) <- paste0(ht.name, "_group")
   col.anno <- list(color.use.col); names(col.anno) <- colnames(df.col)
   row.anno <- list(color.use.row); names(row.anno) <- colnames(df.row)
   col_annotation <- HeatmapAnnotation(df = df.col, col = col.anno, which = "column",
@@ -2108,8 +2119,8 @@ netVisual_heatmap <- function(object, comparison = c(1,2), measure = c("count", 
   axis.param <- list(gp = gpar(fontsize = ifelse(usePublicationStyle(), max(6, 0.6 * font.size), 8)))
   bar.right <- anno_barplot(rowSums(abs(mat)), which = "row", border = FALSE,gp = gpar(fill = color.use.row, col=color.use.row), add_numbers=FALSE,ylim = ylim.right, axis_param = axis.param)
   bar.top <- anno_barplot(colSums(abs(mat)), border = FALSE,gp = gpar(fill = color.use.col, col=color.use.col), add_numbers=FALSE,ylim = ylim.top, axis_param = axis.param)
-  ha1 = do.call(rowAnnotation, c(stats::setNames(list(bar.right), paste0(ht.name, " strength (rows)")), list(show_annotation_name = FALSE)))
-  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(bar.top), paste0(ht.name, " strength (columns)")), list(show_annotation_name = FALSE)))
+  ha1 = do.call(rowAnnotation, c(stats::setNames(list(bar.right), paste0(ht.name, "_strength_rows")), list(show_annotation_name = FALSE)))
+  ha2 = do.call(HeatmapAnnotation, c(stats::setNames(list(bar.top), paste0(ht.name, "_strength_columns")), list(show_annotation_name = FALSE)))
 
   if (sum(abs(mat) > 0) == 1) {
     color.heatmap.use = c("white", color.heatmap.use)
