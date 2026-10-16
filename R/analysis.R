@@ -3073,6 +3073,220 @@ netMappingDEG <- function(object, features.name, variable.all = TRUE, thresh = 0
 }
 
 
+#' Diagnose why differentially expressed genes are found, or not, in the inferred cell-cell communications
+#'
+#' A gene can be differentially expressed between conditions without being part of any inferred communication. For each differentially expressed gene
+#' (as a ligand in its cell group as source, or as a receptor in its cell group as target), this function follows all its ligand-receptor pairs of CellChatDB
+#' through the steps of the inference and reports the first step where they are lost:
+#' \itemize{
+#'   \item "significant": at least one communication with p-value < `thresh` in one of the `datasets`;
+#'   \item "not significant": a communication probability > 0 but no p-value < `thresh` (the communication is not specific to these cell groups);
+#'   \item "expression too low": the pair was analyzed but its communication probability is 0 for all the partners: the gene or its partner is expressed by too few cells of the cell groups
+#'   for the average expression used by `computeCommunProb` (with type = "triMean", the default, a gene expressed by less than 25% of the cells of a cell group has an average expression of 0;
+#'   see type = "truncatedMean" with trim = 0.1 or 0.05, or a sub-clustering of the cell group into the responding cells); cell groups removed by `filterCommunication(min.cells)` also give a probability of 0;
+#'   \item "pair not selected": the partner is expressed but the pair was not used for the inference, because its ligand or receptor was not selected by `identifyOverExpressedGenes`/`identifyOverExpressedInteractions`
+#'   in each condition (strict thresholds at this step, e.g. `thresh.p.adj`/`thresh.fc`, remove many pairs);
+#'   \item "partner not expressed": the partner is expressed by less than `min.pct.partner` of the cells of every cell group: no communication can be inferred in this tissue.
+#' }
+#' This makes it possible to keep a valid differential expression analysis (e.g., the pseudobulk analysis with `group.replicate`) while reporting the communications that cannot be detected,
+#' instead of relaxing the statistical thresholds.
+#'
+#' @param object a merged CellChat object (or a single CellChat object) with the results of `identifyOverExpressedGenes` stored under `features.name`
+#' @param features.name the name used in `identifyOverExpressedGenes` for storing the differential expression results (`object@var.features[[paste0(features.name, ".info")]]`)
+#' @param datasets the datasets in which the communications are searched. Default: the two compared conditions when they can be identified from the differential expression results, otherwise all the datasets
+#' @param genes,clusters restrict the analysis to these genes and/or cell groups
+#' @param thresh threshold of the p-values of the communications
+#' @param min.pct.partner minimum fraction of expressing cells (in at least one cell group) for a partner to be considered as expressed; for a complex, the fraction of its least expressed subunit is used
+#' @param return.pairs whether to return the details of each ligand-receptor pair and dataset instead of one row per differentially expressed gene and cell group
+#'
+#' @return a data frame with one row per differentially expressed gene and cell group: the DEG information, `role` (ligand and/or receptor), `n.pairs` (number of pairs of CellChatDB),
+#' `status` (see above), `pct.<dataset>` (fraction of the cells of the cell group expressing the gene), `n.significant.<dataset>` (number of significant communications),
+#' `best.communication` (the significant communication with the highest probability, otherwise the pair whose partner is the most expressed) and `best.partner` (cell group and fraction of expressing cells of this partner).
+#' With `return.pairs = TRUE`, one row per gene, cell group, pair and dataset.
+#' @export
+#' @examples
+#' \dontrun{
+#' cellchat <- identifyOverExpressedGenes(cellchat, group.dataset = "datasets", pos.dataset = "TrtA", neg.dataset = "Ctrl",
+#'                                        group.replicate = "samples", only.pos = FALSE, thresh.p.adj = 0.05, thresh.fc = 0.25,
+#'                                        features.name = "TrtA.merged")
+#' diag <- diagnoseDEGCommunication(cellchat, features.name = "TrtA.merged")
+#' table(diag$clusters, diag$status)
+#' }
+diagnoseDEGCommunication <- function(object, features.name, datasets = NULL, genes = NULL, clusters = NULL,
+                                     thresh = 0.05, min.pct.partner = 0.1, return.pairs = FALSE) {
+  deg.name <- paste0(features.name, ".info")
+  DEG <- object@var.features[[deg.name]]
+  if (is.null(DEG)) {
+    available <- sub("\\.info$", "", grep("\\.info$", names(object@var.features), value = TRUE))
+    stop("`object@var.features[['", deg.name, "']]` does not exist. Please run `identifyOverExpressedGenes(..., features.name = '", features.name, "')` on this object first",
+         ifelse(length(available) > 0, paste0(" (available: ", toString(available), ")"), ""), ".", call. = FALSE)
+  }
+  if (!all(c("clusters", "features") %in% colnames(DEG))) {
+    stop("`object@var.features[['", deg.name, "']]` does not contain the differential expression results (columns 'clusters' and 'features'). Please run `identifyOverExpressedGenes` with `do.DE = TRUE`.", call. = FALSE)
+  }
+  DEG$clusters <- as.character(DEG$clusters)
+  DEG$features <- as.character(DEG$features)
+  if (!is.null(genes)) DEG <- DEG[DEG$features %in% genes, , drop = FALSE]
+  if (!is.null(clusters)) DEG <- DEG[DEG$clusters %in% clusters, , drop = FALSE]
+  DEG <- DEG[!duplicated(paste(DEG$clusters, DEG$features)), , drop = FALSE]
+  if (nrow(DEG) == 0) {
+    stop("No differentially expressed gene to diagnose (check `genes`, `clusters` and the thresholds used in `identifyOverExpressedGenes`).", call. = FALSE)
+  }
+
+  # communications and cells of each dataset
+  is.merged <- !is.null(object@options$mode) && object@options$mode == "merged"
+  if (is.merged) {
+    nets <- object@net
+    LRsig <- lapply(object@LR, function(x) x$LRsig)
+    labels <- object@idents$joint
+    cell.dataset <- as.character(object@meta$datasets)
+    if (length(cell.dataset) != length(labels)) {
+      stop("`object@meta$datasets` is missing: the object should be created by `mergeCellChat`.", call. = FALSE)
+    }
+    if (is.null(datasets)) {
+      if ("datasets" %in% colnames(DEG) && is.factor(DEG$datasets)) {
+        datasets <- intersect(unlist(strsplit(levels(DEG$datasets), ", ", fixed = TRUE)), names(nets))
+      }
+      if (length(datasets) == 0) datasets <- names(nets)
+    }
+  } else {
+    nets <- list(single = object@net)
+    LRsig <- list(single = object@LR$LRsig)
+    labels <- object@idents
+    cell.dataset <- rep("single", length(labels))
+    datasets <- "single"
+  }
+  if (!all(datasets %in% names(nets))) {
+    stop("Unknown dataset(s): ", toString(setdiff(datasets, names(nets))), ". Available: ", toString(names(nets)), call. = FALSE)
+  }
+  for (d in datasets) {
+    if (is.null(nets[[d]]$prob) || is.null(nets[[d]]$pval)) {
+      stop("No inferred communication in dataset ", d, ": please run `computeCommunProb` before merging.", call. = FALSE)
+    }
+  }
+
+  # fraction of expressing cells of each gene in each cell group and dataset
+  X <- object@data.signaling
+  pct <- lapply(datasets, function(d) {
+    keep <- which(cell.dataset == d)
+    grp <- droplevels(factor(labels[keep]))
+    G <- Matrix::sparseMatrix(i = seq_along(keep), j = as.integer(grp), x = 1, dims = c(length(keep), nlevels(grp)), dimnames = list(NULL, levels(grp)))
+    m <- as.matrix((X[, keep, drop = FALSE] > 0) %*% G)
+    sweep(m, 2, pmax(Matrix::colSums(G), 1), "/")
+  })
+  names(pct) <- datasets
+
+  DB <- object@DB
+  complex <- DB$complex
+  subunit.cols <- grep("^subunit", colnames(complex), value = TRUE)
+  genesOf <- function(x) {
+    if (x %in% rownames(complex)) {
+      v <- unlist(complex[x, subunit.cols], use.names = FALSE)
+      unique(v[!is.na(v) & v != ""])
+    } else {
+      x
+    }
+  }
+  interaction <- DB$interaction
+  L.genes <- lapply(interaction$ligand, genesOf)
+  R.genes <- lapply(interaction$receptor, genesOf)
+  # fraction of expressing cells of a ligand/receptor (least expressed subunit) in each cell group
+  pctLR <- function(gs, d) {
+    p <- pct[[d]]
+    m <- matrix(0, nrow = length(gs), ncol = ncol(p), dimnames = list(gs, colnames(p)))
+    in.data <- gs %in% rownames(p)
+    m[in.data, ] <- p[gs[in.data], , drop = FALSE]
+    apply(m, 2, min)
+  }
+
+  status.levels <- c("significant", "not significant", "expression too low", "pair not selected", "partner not expressed")
+  details <- list()
+  summary <- vector("list", nrow(DEG))
+  for (k in seq_len(nrow(DEG))) {
+    g <- DEG$features[k]; cl <- DEG$clusters[k]
+    isL <- which(vapply(L.genes, function(x) g %in% x, logical(1)))
+    isR <- which(vapply(R.genes, function(x) g %in% x, logical(1)))
+    pairs <- data.frame(idx = c(isL, isR), role = c(rep("ligand", length(isL)), rep("receptor", length(isR))), stringsAsFactors = FALSE)
+    row <- DEG[k, intersect(c("clusters", "features", "logFC", "pvalues", "pvalues.adj", "datasets"), colnames(DEG)), drop = FALSE]
+    row$role <- paste(unique(pairs$role), collapse = "+")
+    row$n.pairs <- nrow(pairs)
+    for (d in datasets) {
+      row[[paste0("pct.", d)]] <- if (g %in% rownames(pct[[d]]) && cl %in% colnames(pct[[d]])) round(pct[[d]][g, cl], 3) else NA
+    }
+    if (nrow(pairs) == 0) {
+      row$status <- "not in CellChatDB"
+      for (d in datasets) row[[paste0("n.significant.", d)]] <- 0
+      row$best.communication <- NA; row$best.partner <- NA
+      summary[[k]] <- row
+      next
+    }
+    res.k <- list()
+    for (i in seq_len(nrow(pairs))) {
+      lr <- rownames(interaction)[pairs$idx[i]]
+      partner <- if (pairs$role[i] == "ligand") interaction$receptor[pairs$idx[i]] else interaction$ligand[pairs$idx[i]]
+      partner.genes <- if (pairs$role[i] == "ligand") R.genes[[pairs$idx[i]]] else L.genes[[pairs$idx[i]]]
+      for (d in datasets) {
+        prob <- nets[[d]]$prob; pval <- nets[[d]]$pval
+        selected <- !is.null(LRsig[[d]]) && lr %in% rownames(LRsig[[d]]) && lr %in% dimnames(prob)[[3]] && cl %in% dimnames(prob)[[1]]
+        P <- V <- NULL
+        if (selected) {
+          P <- if (pairs$role[i] == "ligand") prob[cl, , lr] else prob[, cl, lr]
+          V <- if (pairs$role[i] == "ligand") pval[cl, , lr] else pval[, cl, lr]
+        }
+        p.partner <- pctLR(partner.genes, d)
+        sig <- if (selected) which(P > 0 & V < thresh) else integer(0)
+        best <- if (length(sig) > 0) sig[which.max(P[sig])] else if (selected && max(P) > 0) which.max(P) else NA
+        res.k[[length(res.k) + 1]] <- data.frame(
+          clusters = cl, features = g, interaction_name = lr, role = pairs$role[i], partner = partner, datasets = d,
+          selected = selected, n.significant = length(sig), prob.max = if (selected) max(P) else 0,
+          best.partner.cells = if (!is.na(best)) names(P)[best] else NA_character_,
+          best.pval = if (!is.na(best)) V[best] else NA_real_,
+          partner.pct.max = if (length(p.partner) > 0) max(p.partner) else 0,
+          partner.pct.group = if (length(p.partner) > 0) names(p.partner)[which.max(p.partner)] else NA_character_,
+          stringsAsFactors = FALSE)
+      }
+    }
+    res.k <- do.call(rbind, res.k)
+    # status of each pair across the datasets
+    pair.status <- sapply(split(res.k, res.k$interaction_name), function(x) {
+      if (any(x$n.significant > 0)) "significant"
+      else if (any(x$prob.max > 0)) "not significant"
+      else if (max(x$partner.pct.max) < min.pct.partner) "partner not expressed"
+      else if (any(x$selected)) "expression too low"
+      else "pair not selected"
+    })
+    res.k$status <- factor(pair.status[res.k$interaction_name], levels = status.levels)
+    details[[k]] <- res.k
+    row$status <- status.levels[min(as.integer(res.k$status))]
+    for (d in datasets) {
+      row[[paste0("n.significant.", d)]] <- sum(res.k$n.significant[res.k$datasets == d])
+    }
+    best.pairs <- res.k[as.integer(res.k$status) == min(as.integer(res.k$status)), , drop = FALSE]
+    if (row$status %in% c("significant", "not significant")) {
+      b <- best.pairs[which.max(best.pairs$prob.max), ]
+      arrow <- ifelse(b$role == "ligand", paste0(cl, " -> ", b$best.partner.cells), paste0(b$best.partner.cells, " -> ", cl))
+      row$best.communication <- paste0(b$interaction_name, " (", arrow, ", ", b$datasets, ", p = ", signif(b$best.pval, 2), ")")
+    } else {
+      b <- best.pairs[which.max(best.pairs$partner.pct.max), ]
+      row$best.communication <- b$interaction_name
+    }
+    row$best.partner <- paste0(b$partner, " (", b$partner.pct.group, ": ", round(100 * b$partner.pct.max), "%)")
+    summary[[k]] <- row
+  }
+  if (return.pairs) {
+    out <- do.call(rbind, details)
+  } else {
+    out <- do.call(dplyr::bind_rows, summary)
+    out$status <- factor(out$status, levels = c(status.levels, "not in CellChatDB"))
+    out <- out[order(out$clusters, out$status), , drop = FALSE]
+    message("Status of the ", nrow(out), " differentially expressed gene(s): ",
+            paste0(names(table(out$status))[table(out$status) > 0], " = ", table(out$status)[table(out$status) > 0], collapse = "; "))
+  }
+  rownames(out) <- NULL
+  out
+}
+
+
 #' Compute and visualize the enrichment score of ligand-receptor pairs in one condition compared to another condition
 #'
 #' @param df a dataframe

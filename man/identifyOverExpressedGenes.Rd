@@ -27,6 +27,7 @@ identifyOverExpressedGenes(
   replicate.method = c("limma", "t.test"),
   paired.replicate = FALSE,
   min.cells.replicate = 10,
+  min.pct.test = NULL,
   covariates = NULL,
   do.DE = TRUE,
   do.fast = TRUE,
@@ -85,6 +86,11 @@ logFC is the difference of the mean pseudobulk expression between conditions (na
 \item{paired.replicate}{whether the replicate labels identify the same individuals/donors in the different conditions (paired design, e.g. before/after treatment). Default = FALSE: replicates are considered as different samples in each condition, even if they share the same label (e.g., "rep1" in each condition).}
 
 \item{min.cells.replicate}{the minimum number of cells of a replicate in a cell group for this replicate to be used in the pseudobulk analysis of this cell group. Default = 10}
+
+\item{min.pct.test}{with `group.replicate`: the genes expressed in less than this fraction of the cells of a cell group (all the compared cells pooled, whatever their condition) are not tested in this cell group
+and are not counted in the multiple-testing adjustment, e.g., min.pct.test = 0.05. This independent filtering (Bourgon et al., PNAS 2010) does not use the condition labels, hence it keeps the control of the false discovery rate
+while increasing the power: the adjustment no longer pays for the genes that are hardly expressed in a cell group, which cannot be detected as differentially expressed and can hardly be involved in an inferred communication.
+Default = NULL: all the genes are counted in the adjustment (conservative). NB: `thresh.pc` uses the fraction of expressing cells within each condition and the genes it removes are still counted in the adjustment.}
 
 \item{covariates}{column names of `object@meta` used as covariates in the pseudobulk analysis (requires `group.replicate` and replicate.method = "limma"), e.g., covariates = "sex".
 The covariates should be constant within each replicate. The model is then `~ covariates + condition`: the conditions are compared within each level of the covariates (e.g., males with males and females with females),
